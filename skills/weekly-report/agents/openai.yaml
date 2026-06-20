@@ -1,0 +1,4 @@
+interface:
+  display_name: "Weekly Report"
+  short_description: "Log work entries and generate weekly reports (.xlsx) on demand"
+  default_prompt: "Use this skill when the user wants to log work activities, edit past entries, or generate a weekly report. It maintains running notes in ~/Documents/WeeklyNotes/notes/ and produces a styled .xlsx weekly summary from the user's natural-language input."
