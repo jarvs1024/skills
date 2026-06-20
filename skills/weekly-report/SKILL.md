@@ -1,6 +1,11 @@
 ---
 name: weekly-report
-description: Record daily work notes and generate a styled Excel weekly report on demand. Use when the user says things like "记一笔", "刚才...记一下", "写周报", "出周报", "生成本周周报", "把昨天那条改成...", or asks to delete/edit a recent entry. Maintains running notes in ~/Documents/WeeklyNotes/notes/ (one Markdown file per ISO week) and produces ~/Documents/WeeklyNotes/reports/YYYY-MM-Www/周报-YYYY-MM-Www.xlsx as the primary output. Triggers on Chinese or English; does not trigger for non-work chatter.
+description: >-
+  Log work entries to a weekly Markdown journal and produce a styled Excel
+  weekly report on demand. Triggers: 记一笔, 写周报, 出周报, 把昨天那条
+  改成..., delete/edit requests. Author is an SSD test engineer; polish
+  professionally but never fabricate. Output: .xlsx in
+  ~/Documents/WeeklyNotes/reports/.
 ---
 
 # Weekly Report
@@ -10,6 +15,8 @@ description: Record daily work notes and generate a styled Excel weekly report o
 Log short work activities into a per-week Markdown journal, then compile the journal into a styled `.xlsx` weekly report on demand. Two product surfaces: a passive logger (every message is checked) and an active generator (triggered by "写周报" / "generate weekly report").
 
 ## 开篇示例 (新会话第一屏必读)
+
+> **重要**: 本节代码块内的 `## 6/19 周五` 等是**示例数据**, 不是本文件的章节标题, 不要当成 heading 解析或跳转。
 
 > 假设今天是 2026-06-19 周五, 用户身份 = SSD 测试工程师。
 > 完整走一遍"记录 → 写周报"流程, 让 LLM 看到具体长啥样。
@@ -250,7 +257,9 @@ If `openpyxl` is missing, abort the xlsx step and tell the user the install comm
 
 ## Failure handling
 
-- **Existing report at same path** → offer: overwrite / backup to `.bak`. Never silently overwrite.
+- **Existing report at same path** → **必须主动问用户**: "检测到已有周报 (路径 X), 要 (1) 覆盖 (2) 备份为 .bak 后覆盖 (3) 取消?" . Never silently overwrite. 不要替用户决定。
+- **Excel 锁文件** (`.~xxx.xlsx`) → 提示 "另一个 Excel 在编辑这个文件, 关掉后重试", 不写入。脚本本身不主动处理锁文件 (要 Codex 检查)
+- **重生成 ("再写一次")** → 旧版自动备份为 `.bak` (脚本可加, 或 Codex 自己 mv)
 - **Excel lock file** (`.~xxx.xlsx`) → warn and wait; do not write.
 - **Empty week** (no entries) → ask: "本周没记任何东西,确认要出空周报吗?" If confirmed, produce a stub with header + empty plan section.
 - **Cross-year week** (e.g. W52 → W01) → read both source files; show full year in title.
@@ -268,45 +277,21 @@ If `openpyxl` is missing, abort the xlsx step and tell the user the install comm
 **作者身份**: SSD 测试工程师 (固件 / 老化 / 性能 / 兼容性方向)
 **读者**: 项目经理 + 上下游协作同事 (开发 / 硬件 / 产品 / QA lead)
 
-LLM 在生成周报时**默认从 SSD 测试工程师的专业视角出发**, 可以:
+LLM 在生成周报时**默认从 SSD 测试工程师的专业视角出发**, 但**严守禁止虚构**的红线 (issue 号 / 版本号 / 进度状态 / 协作对象 不可改写或添加)。
 
-- 引用 `references/polish-rules.md` 的领域词表做术语润色
-- 重写口语化 entry 为正式工程描述
-- 补充技术上下文 (如"跑通" → "完成回归验证")
+完整词表 / 3 档润色强度 / 红线 / 自我检查 → `references/polish-rules.md` (107 行)
 
-**红线 (写入 MD 前必查)**:
+## Reference index (按使用时机排序)
 
-- ❌ 不编造 entry 中没有的测试数据
-- ❌ 不虚构 issue / PR / 版本号 (用户写啥就啥)
-- ❌ 不改写进度状态 (进行中 / 已完成 / 阻塞 不可互换)
-- ❌ 不添加 entry 中没有的协作对象
-- ❌ 不把"风险"自动清空或改成"无"
-
-详见 `references/polish-rules.md` 末尾的"自我检查"清单。
-
-## 关联点 (避免描述错位)
-
-| 主题 | 入口 reference | 必读位置 |
+| 触发时机 | 必读 | 用途 |
 |---|---|---|
-| 流水账文件长啥样 | `SKILL.md` 流水账文件格式 一节 | 新会话第一件事 |
-| 记录工作 | `references/logging.md` | 每次记录都走 |
-| 写周报归并 | `references/merging.md` | 写本周总结前必读 |
-| 下周计划 | `references/next-week-plan.md` | 写下周计划前必读, 含**用户确认**流程 |
-| 润色 | `references/polish-rules.md` | 写完 MD 前自检 |
-| 内容判定 | `references/content-classifier.md` | 记录前分类 (A~H) |
-| 编辑 / 删除 | `references/editing.md` | 修改历史 entry |
-| 触发命令 | `references/commands.md` | "写周报" 等命令识别 |
-| Excel 样式 | `references/style-spec.md` | 渲染样式参考 |
-| 脚本说明 | `references/scripts.md` | 跨平台 / 调参时查 |
-
-## Reference index
-
-- `references/commands.md` — exact phrasing that triggers each command mode
-- `references/logging.md` — entry parsing, classifier, post-log follow-up
-- `references/content-classifier.md` — A..H content-type rules (non-work / fuzzy / mixed / empty / duplicate / back-dated / too long / too short)
-- `references/editing.md` — delete / modify / undo / batch
-- `references/style-spec.md` — Excel cell colors, fonts, merges, column widths
-- `references/scripts.md` — what each script does and its CLI surface
-- `references/merging.md` — **mandatory** 3-bucket module taxonomy for the summary table
-- `references/next-week-plan.md` — how to infer next-week plan and the **mandatory** user confirmation step
-- `references/polish-rules.md` — SSD-test-engineer professional polish + **forbidden-fabrication** red lines
+| **新会话第一件事** | `SKILL.md` 顶部 "## 流水账文件格式" 一节 | 知道 notes 文件长啥样, 命名规则, 写周报时读哪些 |
+| 每次记录 | `references/logging.md` | 解析 / 分类 / 路由日期 / 追加 / 回显 |
+| "写周报" 触发 | `references/commands.md` | 哪些短语算周报触发 |
+| 写本周总结前 | `references/merging.md` | **mandatory** 3-5 大类归并规则 |
+| 写完 MD 前 | `references/polish-rules.md` | SSD 测试工程师润色 + **禁止虚构** 红线 |
+| 写下周计划前 | `references/next-week-plan.md` | 推断 + **强制用户确认** |
+| 改 / 删历史 entry | `references/editing.md` | 搜原文 / 确认 / 改 |
+| 记录前分类 | `references/content-classifier.md` | A~H 8 类内容判断 |
+| 调 Excel 样式 | `references/style-spec.md` | 颜色 / 字体 / 合并 / 列宽 |
+| 调脚本 / 跨平台 | `references/scripts.md` | CLI / 入参 / 输出 / 平台差异 |

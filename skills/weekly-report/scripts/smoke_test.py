@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""smoke test: 用一份合成 MD 跑完整 pipeline (parse → xlsx → html),
+"""smoke test: 用一份合成 MD 跑完整 pipeline (parse → xlsx → html)。
 跑不通则 exit 1, 跑通则列出关键断言结果。
 可以在 CI 或 pre-commit 里跑, 不依赖外部硬件。
+
+注意: 这是**测试脚本**, 不是产线代码。正常运行 skill 不需要执行它。
+仅在改完 parse_md / 列宽算法 / render_html 后跑一次, 确认无回归。
 """
 import sys
 import os
