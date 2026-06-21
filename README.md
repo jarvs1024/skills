@@ -21,6 +21,7 @@
   - [macOS / Linux](#macos--linux-claude)
   - [Windows](#windows-claude)
 - [使用 skill](#使用-skill)
+- [数据目录与覆盖方式 (weekly-report)](#数据目录与覆盖方式-weekly-report)
 - [添加新 skill](#添加新-skill)
 - [升级 skill](#升级-skill)
 - [仓库布局](#仓库布局)
@@ -50,7 +51,7 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
     --path skills/weekly-report
 
 # 2. 装 skill 需要的 Python 依赖
-pip3 install --user openpyxl jinja2
+pip3 install --user openpyxl
 
 # 3. 重启 Codex app / 开新 thread
 #    新会话里 "Available skills" 列表就会出现 weekly-report
@@ -61,7 +62,7 @@ pip3 install --user openpyxl jinja2
 ```bash
 ls ~/.codex/skills/weekly-report/
 python3 ~/.codex/skills/weekly-report/scripts/smoke_test.py
-# 期望: 通过 14 / 失败 0
+# 期望: 通过 11 / 失败 0
 ```
 
 ### Windows (Codex)
@@ -75,7 +76,7 @@ python $env:USERPROFILE\.codex\skills\.system\skill-installer\scripts\install-sk
     --path skills/weekly-report
 
 # 2. 装依赖
-pip install openpyxl jinja2
+pip install openpyxl
 
 # 3. 重启 Codex app / 开新 thread
 ```
@@ -85,7 +86,7 @@ pip install openpyxl jinja2
 ```powershell
 dir $env:USERPROFILE\.codex\skills\weekly-report\
 python $env:USERPROFILE\.codex\skills\weekly-report\scripts\smoke_test.py
-# 期望: 通过 14 / 失败 0
+# 期望: 通过 11 / 失败 0
 ```
 
 Windows 路径:
@@ -112,7 +113,7 @@ cp -r /tmp/jarvs-skills/skills/weekly-report ~/.claude/skills/weekly-report
 # Windows / macOS 一样命令
 
 # 3. 装 skill 需要的 Python 依赖
-pip3 install --user openpyxl jinja2
+pip3 install --user openpyxl
 
 # 4. 重启 Claude Code (或开新会话)
 #    在新会话里输入: /weekly-report
@@ -140,7 +141,7 @@ git clone https://github.com/jarvs1024/skills.git $env:TEMP\jarvs-skills
 Copy-Item -Recurse $env:TEMP\jarvs-skills\skills\weekly-report $env:USERPROFILE\.claude\skills\weekly-report
 
 # 3. 装依赖
-pip install openpyxl jinja2
+pip install openpyxl
 
 # 4. 重启 Claude Code
 ```
@@ -167,6 +168,101 @@ Windows 路径:
 | "再写一次" | `/weekly-report` + "再写一次" | 重生成, 旧版备份为 .bak |
 
 详细规则看 [weekly-report/SKILL.md](skills/weekly-report/SKILL.md)。
+
+### 数据目录与覆盖方式 (weekly-report)
+
+`weekly-report` 默认把数据放在平台默认目录:
+
+- **macOS / Linux**: `~/Documents/WeeklyNotes/`
+- **Windows**: `%USERPROFILE%\Documents\WeeklyNotes\` (即 `C:\Users\<用户>\Documents\WeeklyNotes\`)
+
+布局:
+
+```
+<root>/
+├── notes/YYYY-MM-Www.md          # 流水账
+└── reports/YYYY-MM-Www/
+    ├── 周报-YYYY-MM-Www.md
+    └── 周报-YYYY-MM-Www.xlsx     # 主输出
+```
+
+有**三种方式**改变根目录, 优先级从高到低:
+
+#### 1. 会话级覆盖 (推荐, 临时切到任意路径)
+
+在 Codex / Claude 会话里直接说:
+
+- `用 <路径> 当根目录` → 后续所有 read/write/回显都走该路径
+- `用回默认` / `切回默认` → 清除会话级, 回到 env (若有) 或平台默认
+- `当前根目录在哪?` → 回显当前生效的根 + 来源
+
+支持任意绝对或相对路径, `~` 自动展开, 不存在会反问是否创建。
+
+**示例 — Obsidian vault**:
+
+> 你: 用 ~/Documents/obsidian-notes/WeeklyNotes 当根目录
+>
+> LLM: ✅ 已切换根目录: /Users/jarvs/Documents/obsidian-notes/WeeklyNotes
+>         notes:   /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes
+>         reports: /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/reports
+>       本会话所有读/写/回显都走这里。说 "切回默认" 还原。
+>
+> 你: 刚跟硬件组对 FW trim 状态机
+>
+> LLM: 📒 已记 1 条 → /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes/2026-06-W25.md
+
+会话级覆盖**不影响脚本默认值**, 不持久化, 重启会话后自动回到下一优先级 (env / 平台默认)。
+
+#### 2. 环境变量 `WEEKLY_NOTES_DIR` (整个 shell 进程级)
+
+适合"这个项目长期用某个根"。
+
+**macOS / Linux** (临时):
+
+```bash
+export WEEKLY_NOTES_DIR=~/Documents/obsidian-notes/WeeklyNotes
+# 启动 Codex / Claude, 之后的 read/write 走 obsidian-notes
+```
+
+**macOS / Linux** (永久, 写到 `~/.zshrc` 或 `~/.bashrc`):
+
+```bash
+echo 'export WEEKLY_NOTES_DIR=~/Documents/obsidian-notes/WeeklyNotes' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Windows PowerShell** (临时, 仅当前 shell):
+
+```powershell
+$env:WEEKLY_NOTES_DIR = "C:\Users\<用户>\Documents\obsidian-notes\WeeklyNotes"
+```
+
+**Windows** (永久, 用户级):
+
+```powershell
+[System.Environment]::SetEnvironmentVariable(
+    "WEEKLY_NOTES_DIR",
+    "C:\Users\<用户>\Documents\obsidian-notes\WeeklyNotes",
+    "User"
+)
+# 重开 PowerShell / Codex 生效
+```
+
+`scripts/paths.py` 启动时直接读 `WEEKLY_NOTES_DIR`, 命中后 `expanduser` + `resolve` 绝对化。
+
+#### 3. 改 `paths.py` 默认值 — 不推荐
+
+会影响所有用户和机器。除非你 fork 了 skill 不打算共享, 否则别用这个。
+
+#### 覆盖优先级汇总
+
+| 会话级 | env | 实际根 |
+|---|---|---|
+| 未切 | 未设 | 平台默认 `~/Documents/WeeklyNotes` |
+| 未切 | `~/A/B` | `~/A/B` (env 兜底) |
+| `用 ~/C/D 当根目录` | 未设 | `~/C/D` (会话级) |
+| `用 ~/C/D 当根目录` | `~/A/B` | `~/C/D` (会话级胜出, env 被遮蔽) |
+| 任意 | 任意 | "切回默认" → 清会话级, 回 env (若有) → 否则平台默认 |
 
 ### 同时装 Codex + Claude
 
@@ -234,6 +330,7 @@ git pull origin main --rebase
 ```
 .
 ├── README.md                       # 本文件
+├── .gitignore                      # 排除 __pycache__/ 等
 └── skills/
     └── weekly-report/              # weekly-report skill (Codex + Claude 通用)
         ├── SKILL.md
@@ -246,7 +343,7 @@ git pull origin main --rebase
 
 | Skill | Python 包 | 命令 |
 |---|---|---|
-| weekly-report | `openpyxl`, `jinja2` | `pip3 install --user openpyxl jinja2` |
+| weekly-report | `openpyxl` | `pip3 install --user openpyxl` |
 
 ## 许可
 
