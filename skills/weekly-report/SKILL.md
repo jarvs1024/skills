@@ -19,6 +19,22 @@ description: >-
 
 Log short work activities into a per-week Markdown journal, then compile the journal into a styled `.xlsx` weekly report on demand. Two product surfaces: a passive logger (every message is checked) and an active generator (triggered by "写周报" / "generate weekly report").
 
+## 会话开场 · 确认数据根 (新会话第一件事)
+
+**在记第一笔 / 写第一份周报之前**, 确认数据根. 这是**每个会话只做一次**的检查, 之后不要反复问.
+
+判定 + 行动 (完整规则 + 回显模板见 `references/commands.md` "On session start"):
+
+| `WEEKLY_NOTES_DIR` | 行动 |
+|---|---|
+| **已设** | 直接用 env, 主动回显一次"当前根: <abs> (来源: env)", 让用户知道读/写去哪. 不再问. |
+| **未设** | 提示用户配置 (mac/linux/windows 各一行), **同时**告知会暂时用平台默认 `~/Documents/WeeklyNotes`; 等用户回 "好/默认" 或直接发工作内容 → 走默认; 给路径 → 切. |
+| **本会话已说过 `用 <路径> 当根目录`** | 跳过检查, 走已切好的根. |
+
+**不打断原则**: 如果用户**第一句直接是工作内容** (例: "刚跟硬件组对 X"), 不要先问根, 直接 logging; 在 echo 末尾加一句"本周用了默认根, 要换路径说 `用 [path] 当根目录`" 即可.
+
+**会话级状态**: 本节检查的状态 (根路径 + 来源 env/默认/会话覆盖) 整个会话保持, 不再重新探测.
+
 ## 开篇示例 (新会话第一屏必读)
 
 > **重要**: 这是**示例数据**, 帮助新会话快速理解 "记录 / 写周报 / 编辑" 三类操作长啥样.
@@ -86,7 +102,7 @@ Week boundaries: **Friday → next Thursday** (7 calendar days). The Thursday of
 ### Windows 注意事项
 
 - Python 3.8+ (openpyxl 3.x 需要)
-- 装依赖: `pip install openpyxl jinja2`
+- 装依赖: `pip install openpyxl`
 - 终端: 用 Windows Terminal / PowerShell 7+, 旧版 cmd.exe 中文输出会乱码
 - 路径: `python scripts\generate_xlsx.py 周报.md 周报.xlsx --date 2026-06-18`
 - Excel 字体: `Microsoft YaHei` Windows 自带, 直接可用
@@ -206,7 +222,7 @@ See `references/editing.md`. Always show the original entry and require confirma
 Required Python packages (check at session start):
 
 ```bash
-python3 -c "import openpyxl, jinja2" || pip3 install --user openpyxl jinja2
+python3 -c "import openpyxl" || pip3 install --user openpyxl
 ```
 
 If `openpyxl` is missing, abort the xlsx step and tell the user the install command. Do not proceed with a half-built report.

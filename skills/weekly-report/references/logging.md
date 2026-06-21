@@ -16,6 +16,83 @@
 如果用户切了路径后**接着发工作记录**, 静默使用新根; **不需要再问一次**。
 切路径触发见 `references/commands.md` "Set / change data root"。
 
+## On session start check (logging 流程的第一步, 整个会话只做一次)
+
+> **什么时候做**: 收到新会话的**第一句话**时, 在走 logging 解析之前先做这个检查. 之后所有消息都跳过, 直接进下面的 ## Parse the message.
+
+**目标**: 确认本会话的 read/write/回显去哪个根, 主动告诉用户一次, 之后别再问.
+
+### 步骤
+
+1. 读 `WEEKLY_NOTES_DIR` 环境变量 (LLM 用 `os.environ.get` 或 shell `echo $WEEKLY_NOTES_DIR` 探测)
+2. **如果已设**:
+   - 自动 `expanduser` + `resolve` 绝对化 (用 `pathlib.Path` 同 `scripts/paths.py` 逻辑)
+   - 主动回显:
+     ```
+     📂 当前数据根 (env WEEKLY_NOTES_DIR)
+       <abs-path>
+       notes:   <abs>/notes
+       reports: <abs>/reports
+     ```
+   - 记入"已确认"状态, 跳过本节, 继续走 ## Parse the message
+3. **如果未设**:
+   - 回显 "未检测到 env" 提示块 (完整模板见 `references/commands.md` "On session start" 一节)
+   - **不要**替用户决定. 等用户回:
+     - `默认` / `好` → 走平台默认, 记入已确认
+     - `用 <path> 当根目录` → 切路径, 记入已确认
+     - 直接发工作内容 → 视为"先用默认", **走 logging**, 但本条 echo **末尾**追加一行:
+       ```
+       (本周用了默认根 ~/Documents/WeeklyNotes, 要换路径说: 用 [path] 当根目录)
+       ```
+     - 反问 → 反问澄清
+
+### 跨平台 env 设置模板 (给 LLM 用, 嵌入到提示块里)
+
+- **macOS / Linux (zsh, 永久)**:
+  ```bash
+  echo 'export WEEKLY_NOTES_DIR=~/Documents/obsidian-notes/WeeklyNotes' >> ~/.zshrc
+  source ~/.zshrc
+  ```
+- **macOS / Linux (bash, 永久)**:
+  ```bash
+  echo 'export WEEKLY_NOTES_DIR=~/Documents/obsidian-notes/WeeklyNotes' >> ~/.bashrc
+  source ~/.bashrc
+  ```
+- **Windows PowerShell (临时)**:
+  ```powershell
+  $env:WEEKLY_NOTES_DIR = "C:\Users\<user>\Documents\obsidian-notes\WeeklyNotes"
+  ```
+- **Windows (永久, 用户级)**:
+  ```powershell
+  [System.Environment]::SetEnvironmentVariable(
+      "WEEKLY_NOTES_DIR",
+      "C:\Users\<user>\Documents\obsidian-notes\WeeklyNotes",
+      "User"
+  )
+  # 重开 PowerShell / Codex / Claude 生效
+  ```
+
+### 不打断原则 (重要)
+
+- 用户**第一句直接是工作内容** ("刚跟硬件组对 X") → **不要先问根**, 走 logging, echo 末尾加一行"本周用了默认根"提示
+- 用户**第一句是空消息** → 走 commands.md "空消息 / 纯标点 → 拒绝", **不**做根检查
+- 用户**第一句是 "写周报" / "用 X 当根目录"** → 先做根检查, 再走对应流程
+- 用户**第一句是问句** ("周报怎么生成?") → 先做根检查 (env 探测 + 回显), 再回答
+
+### 状态记录
+
+LLM 内部维护一个会话级状态 (不持久化, 关闭会话即丢):
+
+```
+{
+  "session_root": "/Users/.../WeeklyNotes",
+  "source": "env" | "platform_default" | "session_override",
+  "confirmed": true | false
+}
+```
+
+`confirmed=true` 后, 整个会话不再做这个检查 (即使后续 env 被改).
+
 ## Parse the message
 
 Split the user message into entries using these delimiters (in order):
