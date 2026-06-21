@@ -4,8 +4,11 @@ description: >-
   Log work entries to a weekly Markdown journal and produce a styled Excel
   weekly report on demand. Triggers: 记一笔, 写周报, 出周报, 把昨天那条
   改成..., delete/edit requests. Author is an SSD test engineer; polish
-  professionally but never fabricate. Output: .xlsx in
-  ~/Documents/WeeklyNotes/reports/.
+  professionally but never fabricate. Default data root ~/Documents/WeeklyNotes/;
+  user can switch the per-session root with "用 <路径> 当根目录" / "切回默认" —
+  supports arbitrary paths such as an Obsidian vault at
+  /Users/jarvs/Documents/obsidian-notes/WeeklyNotes. Primary output: .xlsx
+  under <root>/reports/.
 ---
 
 # Weekly Report
@@ -43,6 +46,27 @@ Log short work activities into a per-week Markdown journal, then compile the jou
 6. 回显: `📒 已记 2 条 → ~/Documents/WeeklyNotes/notes/2026-06-W25.md`
 7. **主动反问** (口语, 没提进度/风险): "要不要补一下进度和风险?"
 
+### 场景 1.5: 用户切换数据根目录 (Obsidian 风格)
+
+**用户说**:
+> "用 ~/Documents/obsidian-notes/WeeklyNotes 当根目录"
+
+**LLM 流程**:
+
+1. 决策树: 匹配 "用 X 当根目录" → 走 data-root 切换流程 (见 `references/commands.md`)
+2. 展开 `~`, realpath → `/Users/jarvs/Documents/obsidian-notes/WeeklyNotes`
+3. 若不存在 → 反问 "X 不存在, 自动创建?"; 用户确认后 `mkdir -p`
+4. 在内存中记录**当前会话根** = 该路径, 之后所有 read/write/回显都走这里
+5. 回显:
+   ```
+   ✅ 已切换根目录: /Users/jarvs/Documents/obsidian-notes/WeeklyNotes
+     notes:   /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes
+     reports: /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/reports
+   本会话所有读/写/回显都走这里。说 "切回默认" 还原。
+   ```
+6. 用户接着发 "刚跟硬件组对 FW trim 状态机问题" → 走 logging 流程,
+   写到**新根**的 `notes/2026-06-W25.md`
+
 ### 场景 2: 用户写周报
 
 **用户说**:
@@ -58,7 +82,7 @@ Log short work activities into a per-week Markdown journal, then compile the jou
    > 3. 指定日期 (YYYY-MM-DD)"
 
 3. 用户回 "1" → 本周四 = 6/18
-4. **读取 2 个文件**:
+4. **读取 2 个文件** (路径相对于**当前会话根**, 默认 ~/Documents/WeeklyNotes):
    - `2026-06-W24.md` (Fri=6/12, Sat=6/13, Sun=6/14)
    - `2026-06-W25.md` (Mon~Thu = 6/15~6/18)
 5. **归并成 3 大类** (按 merging.md 规则, LLM 起名):
@@ -103,25 +127,50 @@ Log short work activities into a per-week Markdown journal, then compile the jou
 
 ## Data layout
 
-数据根目录(自动按平台选择,可被 `WEEKLY_NOTES_DIR` 环境变量覆盖):
+### 平台默认根 (无任何覆盖时)
 
 - **macOS / Linux**: `~/Documents/WeeklyNotes/`
 - **Windows**: `%USERPROFILE%\Documents\WeeklyNotes\` (即 `C:\Users\<用户>\Documents\WeeklyNotes\`)
-- 覆盖: `export WEEKLY_NOTES_DIR=/path/to/your/root` (macOS/Linux) 或 `set WEEKLY_NOTES_DIR=...` (Windows)
 
-布局:
+### 三种覆盖方式 (优先级从高到低)
+
+1. **会话级覆盖 (推荐)**: 用户在本会话内说 `用 <路径> 当根目录` →
+   后续所有 read/write/回显都走该路径。**会覆盖环境变量**。说 `切回默认` 还原。
+   详见 `references/commands.md` "Set / change data root" 一节。
+2. **环境变量**: `export WEEKLY_NOTES_DIR=/path/to/your/root` (macOS/Linux) 或
+   `set WEEKLY_NOTES_DIR=...` (Windows)。脚本 (`scripts/paths.py`) 直接读这个。
+   在没有会话级覆盖时, env 兜底。
+3. **不推荐**: 改 `scripts/paths.py` 默认值 — 影响所有用户。
+
+**"切回默认" 的语义**: 清除会话级覆盖, 回到 env (若存在) 或平台默认。
+换句话说, env 仍然算一种"默认"。例如:
+
+- `WEEKLY_NOTES_DIR=~/A/B unset` + 说过 "用 ~/C/D 当根目录" → "切回默认" → `~/A/B`
+- 无 env + 说过 "用 ~/C/D 当根目录" → "切回默认" → 平台默认 `~/Documents/WeeklyNotes`
+- 无 env + 从未切过 → "切回默认" 是 no-op
+
+会话级覆盖 = 概念上的 `WEEKLY_NOTES_DIR` 临时设置, **不影响脚本默认值**, 也不持久化;
+关闭会话后 env (若在) 自动恢复, 没设 env 就回到平台默认。
+
+### 常见路径示例
+
+- 纯周报: `~/Documents/WeeklyNotes` (默认)
+- Obsidian 风格: `~/Documents/obsidian-notes/WeeklyNotes`
+  (或 `~/Documents/ObsidianVault/WeeklyNotes`)
+- Worktree 多项目: `~/work/project-a/notes/weekly`
+- 加密目录: `~/Documents/Encrypted/WeeklyNotes`
+
+布局 (所有 read/write 都相对**当前会话根**):
 
 ```
 <root>/
 ├── notes/YYYY-MM-Www.md          # 流水账,每周一个文件,按"## MM/DD 周X"分小节
-├── reports/YYYY-MM-Www/
-│   ├── 周报-YYYY-MM-Www.md
-│   ├── 周报-YYYY-MM-Www.html
-│   └── 周报-YYYY-MM-Www.xlsx     # 主输出
-└── logs/YYYY-MM-DD.log
+└── reports/YYYY-MM-Www/
+    ├── 周报-YYYY-MM-Www.md
+    └── 周报-YYYY-MM-Www.xlsx     # 主输出
 ```
 
-`scripts/paths.py` 提供 `data_root()` / `notes_dir()` / `reports_dir()` / `logs_dir()` / `ensure_dirs()`,跨平台一致。
+`scripts/paths.py` 提供 `data_root()` / `notes_dir()` / `reports_dir()` / `ensure_dirs()`,跨平台一致。**会话级覆盖**在 LLM 这一层体现 (LLM 决定读写哪个绝对路径), 脚本本身仍读 `WEEKLY_NOTES_DIR` 环境变量。
 
 Week boundaries: **Friday → next Thursday** (7 calendar days). The Thursday of the target week is the report's "as-of" date.
 
@@ -140,9 +189,9 @@ Week boundaries: **Friday → next Thursday** (7 calendar days). The Thursday of
 
 ### 文件位置与命名
 
-- 目录: `~/Documents/WeeklyNotes/notes/`
-  - macOS / Linux: `~/Documents/WeeklyNotes/notes/`
-  - Windows: `%USERPROFILE%\Documents\WeeklyNotes\notes\`
+- 目录: `<当前会话根>/notes/`
+  - 平台默认: macOS / Linux `~/Documents/WeeklyNotes/notes/`; Windows `%USERPROFILE%\Documents\WeeklyNotes\notes\`
+  - 用户切过路径时 (例如 Obsidian 风格), 读/写新根下的 `notes/`
 - 命名: **`YYYY-MM-Www.md`**,其中 `YYYY-MM-Www` 是 ISO 周编号
   - 例: 2026 年 6 月第 25 周 → `2026-06-W25.md`
   - ISO 周计算: 用 `python3 -c "from datetime import date; d=date(2026,6,19); print(f'{d.isocalendar()}')"` 验证
@@ -216,7 +265,7 @@ Week boundaries: **Friday → next Thursday** (7 calendar days). The Thursday of
 3. Resolve the target **date** — look for "昨天 / 今天 / 上周五 / YYYY-MM-DD". If explicit date > 7 days from today, ask "要记到 N 月 N 日(超过本周),记到对应周吗?"
 4. Compute the ISO week filename: `YYYY-MM-Www.md`
 5. Read the file (or initialize if missing); append under `## MM/DD 周X`; atomic write via `.tmp` + `rename`
-6. Echo: `📒 已记 N 条 → ~/Documents/WeeklyNotes/notes/YYYY-MM-Www.md`
+6. Echo: `📒 已记 N 条 → <当前会话根>/notes/YYYY-MM-Www.md` (例如 Obsidian 模式: `/Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes/...`)
 7. After logging, run the **post-log follow-up** from `references/logging.md`
 
 ## Quick workflow — generate weekly report
@@ -232,10 +281,8 @@ Triggered by "写周报" / "出周报" / "生成本周周报" / "generate weekly
 4. **Polish content per `references/polish-rules.md`**: rewrite raw 流水账 entries into professional SSD-test-engineer language. Use the domain glossary; light / medium / heavy polish by entry density. **Never invent facts** — keep issue / PR / version numbers verbatim; do not flip "进行中" to "已完成".
 5. **Build next-week plan per `references/next-week-plan.md`**: infer from current-week progress and deadlines, then **show the draft to the user and wait for confirmation** before writing to MD. Default is to show 3~7 items with P0/P1/P2 priorities. Do not write the plan to disk without the user responding.
 6. Write intermediate `周报-YYYY-MM-Www.md` to `reports/.../`
-7. Run `scripts/render_html.py` → `.html`
-8. Run `scripts/generate_xlsx.py --date {thursday}` → `.xlsx` (primary deliverable)
-9. Append a line to `logs/YYYY-MM-DD.log`
-10. Print: report directory path + first 3 lines of the Excel preview
+7. Run `scripts/generate_xlsx.py --date {thursday}` → `.xlsx` (primary deliverable)
+8. Print: report directory path + first 3 lines of the Excel preview
 
 ## Quick workflow — edit or delete
 
@@ -270,7 +317,7 @@ If `openpyxl` is missing, abort the xlsx step and tell the user the install comm
 - No external integrations (no Feishu / Jira / Git auto-fetch)
 - No scheduling, reminders, or wakeups
 - Does not email anything (only generates copy/attach-ready files)
-- Does not touch anything outside `~/Documents/WeeklyNotes/`
+- Does not touch anything outside the **current session root** (default `~/Documents/WeeklyNotes/`, or whatever path the user set with `用 <路径> 当根目录`)
 
 ## 用户角色与润色边界
 

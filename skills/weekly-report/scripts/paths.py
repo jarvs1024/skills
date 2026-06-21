@@ -28,15 +28,11 @@ def notes_dir() -> pathlib.Path:
 def reports_dir() -> pathlib.Path:
     return data_root() / "reports"
 
-def logs_dir() -> pathlib.Path:
-    return data_root() / "logs"
-
 def ensure_dirs() -> pathlib.Path:
-    """确保数据根 + 三个子目录都存在。返回根路径。"""
+    """确保数据根 + 两个子目录 (notes / reports) 都存在。返回根路径。"""
     root = data_root()
     (root / "notes").mkdir(parents=True, exist_ok=True)
     (root / "reports").mkdir(parents=True, exist_ok=True)
-    (root / "logs").mkdir(parents=True, exist_ok=True)
     return root
 
 if __name__ == "__main__":
@@ -45,4 +41,3 @@ if __name__ == "__main__":
     print(f"Data root: {root}")
     print(f"  notes:   {notes_dir()}")
     print(f"  reports: {reports_dir()}")
-    print(f"  logs:    {logs_dir()}")

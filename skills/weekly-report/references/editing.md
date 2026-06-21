@@ -1,5 +1,14 @@
 # Edit / delete / undo
 
+## Apply to the current session root
+
+所有编辑/删除都作用于 **当前会话根** 的 `notes/` 目录
+(默认 `~/Documents/WeeklyNotes/notes/`, 用户切过路径则用新路径, 例如 Obsidian 模式的
+`/Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes/`)。
+
+- 编辑/删除前, 如果该路径下没有目标 entry, 主动说: "当前会话根 (X) 的本周文件里没找到, 要 (1) 切到其它根 (2) 搜全根目录 (3) 取消?"
+- 跨根操作: 先 `用 <路径> 当根目录` 切到目标根, 再做编辑
+
 ## Delete the most recent entry ("刚才那条删掉")
 
 1. Find the latest entry in the current week's file

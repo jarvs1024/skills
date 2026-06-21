@@ -1,5 +1,21 @@
 # Logging workflow
 
+## Current session root (读这节再写)
+
+所有 read/write/回显的根 = **当前会话根**。判定顺序:
+
+1. 用户本会话内说过 `用 <路径> 当根目录` → 用该路径 (覆盖 env)
+2. 否则看 env: `WEEKLY_NOTES_DIR` 设了 → 用 env (脚本会 `expanduser` + `resolve`)
+3. 否则 = 平台默认 (`~/Documents/WeeklyNotes/` 或 `%USERPROFILE%\Documents\WeeklyNotes\`)
+
+`切回默认` 会清除第 1 项, 不清除 env; 然后按 2 → 3 顺序回退。
+
+`notes/`, `reports/` 两个子目录都在会话根下。回显路径用 **绝对路径**,
+别再用 `~/...`, 避免切过路径后用户认不出来。
+
+如果用户切了路径后**接着发工作记录**, 静默使用新根; **不需要再问一次**。
+切路径触发见 `references/commands.md` "Set / change data root"。
+
 ## Parse the message
 
 Split the user message into entries using these delimiters (in order):
@@ -36,7 +52,7 @@ If the resolved date is more than 7 days from today, confirm before writing to a
 
 ## Append to file
 
-Path: `~/Documents/WeeklyNotes/notes/YYYY-MM-Www.md`
+Path: `<当前会话根>/notes/YYYY-MM-Www.md` (绝对路径, 例: Obsidian 模式 `/Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes/2026-06-W25.md`)
 
 Format inside the file:
 
@@ -52,8 +68,10 @@ Atomic write: write to `YYYY-MM-Www.md.tmp` first, then `os.rename` to final. Ne
 ## Echo to user
 
 ```
-📒 已记 N 条 → ~/Documents/WeeklyNotes/notes/YYYY-MM-Www.md
+📒 已记 N 条 → <当前会话根>/notes/YYYY-MM-Www.md
 ```
+
+(实际回显用绝对路径, 例如 `📒 已记 2 条 → /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes/2026-06-W25.md`)
 
 If classifier flagged anything, list the flagged items separately and ask.
 

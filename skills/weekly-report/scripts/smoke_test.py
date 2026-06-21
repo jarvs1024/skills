@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""smoke test: 用一份合成 MD 跑完整 pipeline (parse → xlsx → html)。
+"""smoke test: 用一份合成 MD 跑 xlsx pipeline。
 跑不通则 exit 1, 跑通则列出关键断言结果。
 可以在 CI 或 pre-commit 里跑, 不依赖外部硬件。
 
 注意: 这是**测试脚本**, 不是产线代码。正常运行 skill 不需要执行它。
-仅在改完 parse_md / 列宽算法 / render_html 后跑一次, 确认无回归。
+仅在改完 parse_md / 列宽算法 / generate_xlsx 后跑一次, 确认无回归。
 """
 import sys
 import os
@@ -34,7 +34,6 @@ def _load(name, path):
     return mod
 
 gen_mod = _load("generate_xlsx", SCRIPTS_DIR / "generate_xlsx.py")
-html_mod = _load("render_html", SCRIPTS_DIR / "render_html.py")
 
 # 合成 MD, 覆盖关键场景:
 # - 多个工作模块, 每个模块多条子内容 (<br>)
@@ -148,31 +147,6 @@ def main():
                 passed += 1
             else:
                 failed += 1
-            # --- 3. md_to_html ---
-            print("\n[3] md_to_html")
-            html_path = pathlib.Path(tmp) / "sample.html"
-            html_mod.md_to_html(md_path, html_path)
-            if assert_true(html_path.exists(), "html 文件已生成"):
-                passed += 1
-            else:
-                failed += 1
-            html_content = html_path.read_text(encoding="utf-8")
-            if assert_true("<br>" in html_content, "html 包含 <br> 换行标签"):
-                passed += 1
-            else:
-                failed += 1
-            # XSS 防御
-            xss_md = "# t\n\n> meta\n\n## h\n\n| 序号 | 工作模块 |\n|---|---|\n| 1 | <script>alert(1)</script> |\n\n| 序号 | 优先级 |\n|---|---|\n| 1 | P0 |\n"
-            md2 = pathlib.Path(tmp) / "xss.md"
-            md2.write_text(xss_md, encoding="utf-8")
-            xss_xlsx = pathlib.Path(tmp) / "xss.xlsx"
-            xss_html = pathlib.Path(tmp) / "xss.html"
-            gen_mod.md_to_xlsx(md2, xss_xlsx, today=__import__("datetime").date(2026, 6, 18))
-            html_mod.md_to_html(md2, xss_html)
-            xss_html_content = xss_html.read_text(encoding="utf-8")
-            if assert_true("<script>alert" not in xss_html_content, "html 已 escape <script>"):
-                passed += 1
-            else:
                 failed += 1
     except Exception:
         print("[CRASH]")
