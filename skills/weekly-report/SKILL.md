@@ -4,11 +4,13 @@ description: >-
   Log work entries to a weekly Markdown journal and produce a styled Excel
   weekly report on demand. Triggers: 记一笔, 写周报, 出周报, 把昨天那条
   改成..., delete/edit requests. Author is an SSD test engineer; polish
-  professionally but never fabricate. Default data root ~/Documents/WeeklyNotes/;
-  user can switch the per-session root with "用 <路径> 当根目录" / "切回默认" —
-  supports arbitrary paths such as an Obsidian vault at
-  /Users/jarvs/Documents/obsidian-notes/WeeklyNotes. Primary output: .xlsx
-  under <root>/reports/.
+  professionally but never fabricate. Default data root is
+  ~/Documents/WeeklyNotes/, with two subdirs: notes/ and reports/ (no logs/,
+  no HTML output). The user can switch the per-session data root in-chat with
+  phrases like 用 [path] 当根目录 or 切回默认, supporting arbitrary paths
+  such as an Obsidian vault at
+  /Users/jarvs/Documents/obsidian-notes/WeeklyNotes. Primary output: a
+  styled .xlsx under the current session root reports/ directory.
 ---
 
 # Weekly Report
@@ -19,111 +21,18 @@ Log short work activities into a per-week Markdown journal, then compile the jou
 
 ## 开篇示例 (新会话第一屏必读)
 
-> **重要**: 本节代码块内的 `## 6/19 周五` 等是**示例数据**, 不是本文件的章节标题, 不要当成 heading 解析或跳转。
+> **重要**: 这是**示例数据**, 帮助新会话快速理解 "记录 / 写周报 / 编辑" 三类操作长啥样.
+> 详细场景 + 完整对话走查见 [`references/example-week.md`](references/example-week.md).
 
-> 假设今天是 2026-06-19 周五, 用户身份 = SSD 测试工程师。
-> 完整走一遍"记录 → 写周报"流程, 让 LLM 看到具体长啥样。
+**三种典型场景一图速览**:
 
-### 场景 1: 用户记录工作
+| 场景 | 用户第一句 | LLM 走的流程 |
+|---|---|---|
+| 记录工作 | "刚跟硬件组对 X" | logging (分类 → 路由日期 → 追加) |
+| 写周报 | "写周报" | generate (反问日期 → 归并 3-5 类 → 润色 → 用户确认 → xlsx) |
+| 编辑/删除 | "把昨天那条 X 改成 Y" / "刚才那条删掉" | editing (搜原文 → 展示 → 确认 → 改) |
 
-**用户说**:
-> "刚跟硬件组对 FW trim 状态机问题,然后 14:30 写 fio 随机写 latency 脚本,支持顺序/随机/混合三种负载"
-
-**LLM 流程**:
-
-1. 决策树: 这是工作记录 → 走 logging 流程
-2. 内容分类: 都是工作, 不是 A/B/C 类别, 不需要反问
-3. 日期: 没有时间词 → 今天 (6/19)
-4. 文件: `2026-06-W25.md` (ISO 周验证: 6/19 = W25)
-5. 解析成 2 条 entry, 追加到文件:
-
-```markdown
-## 6/19 周五
-- 14:00 跟硬件组对 FW trim 状态机问题
-- 14:30 写 fio 随机写 latency 脚本,支持顺序/随机/混合三种负载
-```
-
-6. 回显: `📒 已记 2 条 → ~/Documents/WeeklyNotes/notes/2026-06-W25.md`
-7. **主动反问** (口语, 没提进度/风险): "要不要补一下进度和风险?"
-
-### 场景 1.5: 用户切换数据根目录 (Obsidian 风格)
-
-**用户说**:
-> "用 ~/Documents/obsidian-notes/WeeklyNotes 当根目录"
-
-**LLM 流程**:
-
-1. 决策树: 匹配 "用 X 当根目录" → 走 data-root 切换流程 (见 `references/commands.md`)
-2. 展开 `~`, realpath → `/Users/jarvs/Documents/obsidian-notes/WeeklyNotes`
-3. 若不存在 → 反问 "X 不存在, 自动创建?"; 用户确认后 `mkdir -p`
-4. 在内存中记录**当前会话根** = 该路径, 之后所有 read/write/回显都走这里
-5. 回显:
-   ```
-   ✅ 已切换根目录: /Users/jarvs/Documents/obsidian-notes/WeeklyNotes
-     notes:   /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/notes
-     reports: /Users/jarvs/Documents/obsidian-notes/WeeklyNotes/reports
-   本会话所有读/写/回显都走这里。说 "切回默认" 还原。
-   ```
-6. 用户接着发 "刚跟硬件组对 FW trim 状态机问题" → 走 logging 流程,
-   写到**新根**的 `notes/2026-06-W25.md`
-
-### 场景 2: 用户写周报
-
-**用户说**:
-> "写周报"
-
-**LLM 流程**:
-
-1. 触发命令 "写周报" → 走 generate 流程
-2. **先反问日期**:
-   > "这是给哪一周写的?
-   > 1. 本周 (6/12 ~ 6/18) ← 默认
-   > 2. 上周 (6/5 ~ 6/11)
-   > 3. 指定日期 (YYYY-MM-DD)"
-
-3. 用户回 "1" → 本周四 = 6/18
-4. **读取 2 个文件** (路径相对于**当前会话根**, 默认 ~/Documents/WeeklyNotes):
-   - `2026-06-W24.md` (Fri=6/12, Sat=6/13, Sun=6/14)
-   - `2026-06-W25.md` (Mon~Thu = 6/15~6/18)
-5. **归并成 3 大类** (按 merging.md 规则, LLM 起名):
-   - `① SSD 老化与回归` (4 条子条目)
-   - `② 研发协作` (1 条不编号)
-   - `③ 准入准出文档` (1 条不编号)
-6. **润色** (按 polish-rules.md): 口语 → SSD 测试工程师专业术语
-7. **推断下周计划** (按 next-week-plan.md): 5 条, P0/P1 混合
-8. **展示下周计划给用户确认**:
-   > "根据本周进度, 我推断了下周计划:
-   > 1. P0  推进 BIB_V1.4.3 154 转测适配 ...
-   > 2. P0  跟进固件 3.1 版本测试 ...
-   > 3. P1  修复 #413 回归脚本报错 ...
-   > 4. P1  推进《老化准入准出》v0.3 完成审阅 ...
-   > 确认这样吗? (回 OK 落盘, 或 改成: ...)"
-
-9. 用户回 "OK" → 落盘 MD 到 `reports/2026-06-W25/周报-2026-06-W25.md`
-10. 渲染 HTML + xlsx
-11. 写日志 + 回显路径
-
-### 场景 3: 用户编辑/删除
-
-**用户说**:
-> "把昨天那条 BIB 适配改成 BIB_V1.4.3 154 颗粒适配"
-
-**LLM 流程** (按 editing.md):
-
-1. 找日期: 昨天 = 6/18
-2. 搜文件 `2026-06-W25.md` 的 `## 6/18 周五` 小节
-3. 找包含 "BIB 适配" 的 entry
-4. 展示原文: "原: BIB 适配 → 改成: BIB_V1.4.3 154 颗粒适配, 确认吗?"
-5. 用户回 "确认" → 改 entry 时间戳保留, 改值
-6. 回显: "已改: 6/18 周五 - BIB_V1.4.3 154 颗粒适配"
-
-### 一句话总结
-
-- **记录**: 解析 → 分类 → 路由日期 → 追加到 `notes/YYYY-MM-Www.md` → 回显
-- **写周报**: 反问日期 → 读 2 个文件 → 归并 3~5 类 → 润色 → 推断下周计划 → **用户确认** → 渲染 xlsx
-- **编辑/删除**: 搜原文 → 展示 → 确认 → 改
-
----
+要看完整对话示例 (含时间戳、文件路径、回显格式) → 读 `references/example-week.md`.
 
 ## Data layout
 
