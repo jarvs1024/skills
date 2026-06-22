@@ -96,6 +96,16 @@ def main():
                 passed += 1
             else:
                 failed += 1
+            # 新增: md 必须含两个 H2 小标题, 跟 xlsx sheet 标题对齐
+            raw_md = md_path.read_text(encoding="utf-8")
+            if assert_true("## 本周工作总结" in raw_md, "md 含 ## 本周工作总结 小标题"):
+                passed += 1
+            else:
+                failed += 1
+            if assert_true("## 下周工作计划" in raw_md, "md 含 ## 下周工作计划 小标题"):
+                passed += 1
+            else:
+                failed += 1
             header, body = tables[0]
             if assert_eq(len(header), 5, "summary header 列数 = 5"):
                 passed += 1

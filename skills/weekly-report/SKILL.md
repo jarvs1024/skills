@@ -205,7 +205,29 @@ Triggered by "写周报" / "出周报" / "生成本周周报" / "generate weekly
 3. Group entries by work module; merge multi-day items. **Before writing, read `references/merging.md`** — the skill enforces a merge-into-3-to-5-buckets structure: **one Excel row per module, multiple sub-items inside that row numbered `1) 2) 3)` (only when ≥2 sub-items) and separated by `<br>`; the content / progress / risk columns must contain no in-cell dates**. Bucket names are LLM-chosen based on what the user actually worked on that week. Do not reuse a fixed taxonomy across weeks if the work has shifted.
 4. **Polish content per `references/polish-rules.md`**: rewrite raw 流水账 entries into professional SSD-test-engineer language. Use the domain glossary; light / medium / heavy polish by entry density. **Never invent facts** — keep issue / PR / version numbers verbatim; do not flip "进行中" to "已完成".
 5. **Build next-week plan per `references/next-week-plan.md`**: infer from current-week progress and deadlines, then **show the draft to the user and wait for confirmation** before writing to MD. Default is to show 3~7 items with P0/P1/P2 priorities. Do not write the plan to disk without the user responding.
-6. Write intermediate `周报-YYYY-MM-Www.md` to `reports/.../`
+6. Write intermediate `周报-YYYY-MM-Www.md` to `reports/.../`. **必须**严格按下面模板, 含两个 H2 小标题, 跟 xlsx sheet 标题对齐:
+
+```markdown
+# 周报 - 2026 第 X 周 (M/D ~ M/D)
+
+> 生成于 YYYY-MM-DD HH:MM · 本周工作日 N 天
+
+## 本周工作总结 (M/D ~ M/D)
+
+| 序号 | 工作模块 | 工作内容与成果 | 完成进度 | 风险点 |
+|---|---|---|---|---|
+| 1 | ... | ... | ... | ... |
+
+## 下周工作计划 (M/D ~ M/D)
+
+| 序号 | 优先级 | 工作计划 |
+|---|---|---|
+| 1 | P0 | ... |
+```
+
+- 两个 H2 小标题 (`## 本周工作总结` / `## 下周工作计划`) **不可省略**, 跟 xlsx 的 sheet 标题行对应
+- 日期范围 (M/D ~ M/D) 跟 xlsx 标题行的 `(YYYY.M.D ~ D)` 完全一致
+- 表格格式严格按 `references/merging.md` "表格输出格式" 一节 (5 列 / 3 列, `<br>` 换行, 无 in-cell 日期)
 7. Run `scripts/generate_xlsx.py --date {thursday}` → `.xlsx` (primary deliverable)
 8. Print: report directory path + first 3 lines of the Excel preview
 
