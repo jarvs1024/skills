@@ -13,18 +13,70 @@
 
 ## 目录
 
+- [安装](#安装)
 - [可用 skill 列表](#可用-skill-列表)
-- [安装 skill (Codex)](#安装-skill-codex)
-  - [macOS / Linux](#macos--linux-codex)
-  - [Windows](#windows-codex)
-- [安装 skill (Claude Code)](#安装-skill-claude-code)
-  - [macOS / Linux](#macos--linux-claude)
-  - [Windows](#windows-claude)
 - [使用 skill](#使用-skill)
-- [数据目录与覆盖方式 (weekly-report)](#数据目录与覆盖方式-weekly-report)
+- [数据目录与覆盖方式 weekly-report](#数据目录与覆盖方式-weekly-report)
 - [添加新 skill](#添加新-skill)
-- [升级 skill](#升级-skill)
+- [升级](#升级)
 - [仓库布局](#仓库布局)
+- [依赖](#依赖)
+- [许可](#许可)
+
+## 安装
+
+下载 zip → 解压 → 拷到目标目录 → 装依赖 → 验证。
+
+**适用于所有客户端** (Codex / Claude Code / 任何支持 skills 的 agent):
+
+```bash
+# 1. 下载 zip (47 KB)
+curl -L -o /tmp/skills.zip https://github.com/jarvs1024/skills/archive/refs/heads/main.zip
+
+# 2. 解压, 得到 skills-main/skills/weekly-report/
+unzip /tmp/skills.zip -d /tmp/
+
+# 3. 拷到目标目录 (任选 / 全选, 拷到哪个就用哪个客户端)
+mkdir -p ~/.codex/skills ~/.claude/skills ~/.agents/skills
+cp -R /tmp/skills-main/skills/weekly-report ~/.codex/skills/weekly-report
+cp -R /tmp/skills-main/skills/weekly-report ~/.claude/skills/weekly-report
+cp -R /tmp/skills-main/skills/weekly-report ~/.agents/skills/weekly-report
+
+# 4. 装依赖 (weekly-report 需要 openpyxl)
+pip3 install --user openpyxl
+
+# 5. 验证
+python3 ~/.codex/skills/weekly-report/scripts/smoke_test.py
+# 期望: 通过 13 / 失败 0
+```
+
+**Windows PowerShell**:
+
+```powershell
+# 1. 下载 zip
+Invoke-WebRequest -Uri "https://github.com/jarvs1024/skills/archive/refs/heads/main.zip" -OutFile "$env:TEMP\skills.zip"
+
+# 2. 解压
+Expand-Archive -Path "$env:TEMP\skills.zip" -DestinationPath "$env:TEMP\"
+
+# 3. 拷到目标目录 (任选)
+$skill = "$env:TEMP\skills-main\skills\weekly-report"
+Copy-Item -Recurse $skill "$env:USERPROFILE\.codex\skills\weekly-report"
+Copy-Item -Recurse $skill "$env:USERPROFILE\.claude\skills\weekly-report"
+Copy-Item -Recurse $skill "$env:USERPROFILE\.agents\skills\weekly-report"
+
+# 4. 装依赖
+pip install openpyxl
+
+# 5. 验证
+python $env:USERPROFILE\.codex\skills\weekly-report\scripts\smoke_test.py
+```
+
+**完成后**:
+
+- **Codex**: 重启 Codex app / 新开 thread, 新会话里 "Available skills" 会出现 weekly-report, 自动匹配触发
+- **Claude Code**: 重启 / 新开会话, 输入 `/weekly-report` 触发
+- **其它 agent**: 启动时按各自约定加载 `~/.codex/skills/` 或 `~/.claude/skills/` 或 `~/.agents/skills/`
 
 ## 可用 skill 列表
 
@@ -36,122 +88,6 @@
 
 ---
 
-## 安装 skill (Codex)
-
-通过 Codex 自带的 `skill-installer` 装到 `~/.codex/skills/`, 启动 Codex 时自动加载。
-
-### macOS / Linux (Codex)
-
-前置: Python 3.8+
-
-```bash
-# 1. 装 skill
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-    --repo jarvs1024/skills \
-    --path skills/weekly-report
-
-# 2. 装 skill 需要的 Python 依赖
-pip3 install --user openpyxl
-
-# 3. 重启 Codex app / 开新 thread
-#    新会话里 "Available skills" 列表就会出现 weekly-report
-```
-
-验证:
-
-```bash
-ls ~/.codex/skills/weekly-report/
-python3 ~/.codex/skills/weekly-report/scripts/smoke_test.py
-# 期望: 通过 11 / 失败 0
-```
-
-### Windows (Codex)
-
-前置: Python 3.8+, PowerShell 7+ (旧版 cmd.exe 中文会乱码)
-
-```powershell
-# 1. 装 skill
-python $env:USERPROFILE\.codex\skills\.system\skill-installer\scripts\install-skill-from-github.py `
-    --repo jarvs1024/skills `
-    --path skills/weekly-report
-
-# 2. 装依赖
-pip install openpyxl
-
-# 3. 重启 Codex app / 开新 thread
-```
-
-验证:
-
-```powershell
-dir $env:USERPROFILE\.codex\skills\weekly-report\
-python $env:USERPROFILE\.codex\skills\weekly-report\scripts\smoke_test.py
-# 期望: 通过 11 / 失败 0
-```
-
-Windows 路径:
-- Codex skill 默认位置: `C:\Users\<你的用户>\.codex\skills\`
-- 数据目录 (weekly-report): `C:\Users\<你的用户>\Documents\WeeklyNotes\`
-- 推荐用 **Windows Terminal** (Microsoft Store 免费装), 旧版 cmd 中文会乱码
-
----
-
-## 安装 skill (Claude Code)
-
-通过 git clone 或 GitHub 下载 zip 装到 `~/.claude/skills/`, 用 `/$skill-name` 触发。
-
-### macOS / Linux (Claude)
-
-前置: Python 3.8+, Git
-
-```bash
-# 1. Clone 仓库到本地 (只读够用)
-git clone https://github.com/jarvs1024/skills.git /tmp/jarvs-skills
-
-# 2. 复制 skill 到 Claude 的 skills 目录
-cp -r /tmp/jarvs-skills/skills/weekly-report ~/.claude/skills/weekly-report
-# Windows / macOS 一样命令
-
-# 3. 装 skill 需要的 Python 依赖
-pip3 install --user openpyxl
-
-# 4. 重启 Claude Code (或开新会话)
-#    在新会话里输入: /weekly-report
-#    Claude 就会激活这个 skill
-```
-
-验证:
-
-```bash
-ls ~/.claude/skills/weekly-report/
-# 应看到: SKILL.md  agents/  references/  scripts/
-```
-
-Claude 触发: 在会话里输入 `/weekly-report` (slash command), Claude 会加载 `SKILL.md` 并按其指令行动。
-
-### Windows (Claude)
-
-前置: Python 3.8+, PowerShell 7+, Git
-
-```powershell
-# 1. Clone 仓库
-git clone https://github.com/jarvs1024/skills.git $env:TEMP\jarvs-skills
-
-# 2. 复制 skill 到 Claude 的 skills 目录
-Copy-Item -Recurse $env:TEMP\jarvs-skills\skills\weekly-report $env:USERPROFILE\.claude\skills\weekly-report
-
-# 3. 装依赖
-pip install openpyxl
-
-# 4. 重启 Claude Code
-```
-
-Windows 路径:
-- Claude skill 默认位置: `C:\Users\<你的用户>\.claude\skills\`
-- 数据目录 (weekly-report): `C:\Users\<你的用户>\Documents\WeeklyNotes\`
-- 推荐用 **Windows Terminal** (Microsoft Store 免费装), 旧版 cmd 中文会乱码
-
----
 
 ## 使用 skill
 
@@ -169,7 +105,7 @@ Windows 路径:
 
 详细规则看 [weekly-report/SKILL.md](skills/weekly-report/SKILL.md)。
 
-### 数据目录与覆盖方式 (weekly-report)
+### 数据目录与覆盖方式 weekly-report
 
 `weekly-report` 默认把数据放在平台默认目录:
 
@@ -283,47 +219,19 @@ $env:WEEKLY_NOTES_DIR = "C:\Users\<用户>\Documents\obsidian-notes\WeeklyNotes"
 
 参考 [weekly-report](skills/weekly-report/) 看完整结构。
 
-## 升级 skill
 
-### 方式 1: 重装 (覆盖本地 skill)
+## 升级
 
-**Codex (Mac):**
-```bash
-rm -rf ~/.codex/skills/weekly-report
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-    --repo jarvs1024/skills --path skills/weekly-report
-```
+重新执行 [安装](#安装) 步骤 1-3 (覆盖即可). 装新 skill 同理.
 
-**Codex (Windows PowerShell):**
-```powershell
-Remove-Item -Recurse -Force $env:USERPROFILE\.codex\skills\weekly-report
-python $env:USERPROFILE\.codex\skills\.system\skill-installer\scripts\install-skill-from-github.py `
-    --repo jarvs1024/skills --path skills/weekly-report
-```
-
-**Claude (Mac):**
-```bash
-rm -rf ~/.claude/skills/weekly-report
-git clone https://github.com/jarvs1024/skills.git /tmp/jarvs-skills
-cp -r /tmp/jarvs-skills/skills/weekly-report ~/.claude/skills/weekly-report
-```
-
-**Claude (Windows PowerShell):**
-```powershell
-Remove-Item -Recurse -Force $env:USERPROFILE\.claude\skills\weekly-report
-git clone https://github.com/jarvs1024/skills.git $env:TEMP\jarvs-skills
-Copy-Item -Recurse $env:TEMP\jarvs-skills\skills\weekly-report $env:USERPROFILE\.claude\skills\weekly-report
-```
-
-### 方式 2: 改用 git 同步 (适合开发者)
-
-```bash
-cd ~/.claude/skills/weekly-report
-git init && git remote add origin https://github.com/jarvs1024/skills.git
-git pull origin main --rebase
-```
-
-之后 `cd` 进去就能 `git pull` 升级。
+> **开发者 (可选)**: 想 `git pull` 升级可以这样:
+> ```bash
+> cd <目标 skill 目录>     # 例: ~/.claude/skills/weekly-report
+> git init -b main
+> git remote add origin https://github.com/jarvs1024/skills.git
+> git pull origin main --rebase
+> ```
+> 之后 `git pull` 即可. 但 zip 装更简单, 不推荐用 git 除非你要本地改 skill.
 
 ## 仓库布局
 
