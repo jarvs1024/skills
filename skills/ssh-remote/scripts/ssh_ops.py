@@ -976,6 +976,7 @@ def cmd_test(args) -> int:
     _check_constraints(cfg, alias, "test")
     _confirm_host(target, "test (connectivity check + host info)", args)
     client = _build_client(target, args)
+    args._client = client
     try:
         transport = client.get_transport()
         rsa_key = transport.get_remote_server_key() if transport else None
@@ -993,8 +994,7 @@ def cmd_test(args) -> int:
         _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
-        client.close()
-
+        pass
 
 def cmd_exec(args) -> int:
     cfg = _ensure_cfg()
@@ -1016,6 +1016,7 @@ def cmd_exec(args) -> int:
             _confirm_high_risk(args.command, target, "host/env requires double confirm", "high", args)
 
     client = _build_client(target, args)
+    args._client = client
     try:
         mkdir_cmd = f"mkdir -p {shlex.quote(remote_staging)}"
         mkdir_rc = _run_and_print(client, mkdir_cmd, timeout=args.timeout)
@@ -1029,8 +1030,7 @@ def cmd_exec(args) -> int:
             _touch_last_used(cfg, alias)
         return rc
     finally:
-        client.close()
-
+        pass
 
 def _sftp_chmod_r(sftp, remote_path: str, mode: int) -> None:
     """Recursively chmod remote_path and everything beneath it.
@@ -1082,6 +1082,7 @@ def cmd_upload(args) -> int:
         sys.stderr.write(f"[ERROR] local path not found: {local_path}\n")
         return EXIT_USAGE
     client = _build_client(target, args)
+    args._client = client
     try:
         sftp = client.open_sftp()
         deadline = time.monotonic() + args.transfer_timeout
@@ -1113,8 +1114,7 @@ def cmd_upload(args) -> int:
         _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
-        client.close()
-
+        pass
 
 def cmd_download(args) -> int:
     cfg = _ensure_cfg()
@@ -1126,6 +1126,7 @@ def cmd_download(args) -> int:
     op = f"download {args.remote} -> {args.local}"
     _confirm_host(target, op, args)
     client = _build_client(target, args)
+    args._client = client
     try:
         sftp = client.open_sftp()
         local_path = Path(args.local)
@@ -1155,8 +1156,7 @@ def cmd_download(args) -> int:
         _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
-        client.close()
-
+        pass
 
 def cmd_probe_net(args) -> int:
     cfg = _ensure_cfg()
@@ -1176,6 +1176,7 @@ def cmd_probe_net(args) -> int:
     op = "probe-net (read-only network reachability)"
     _confirm_host(target, op, args)
     client = _build_client(target, args)
+    args._client = client
     try:
         shell = "/bin/bash" if _remote_has(client, "/bin/bash") else "/bin/sh"
         targets = args.targets if args.targets else [
@@ -1209,8 +1210,7 @@ def cmd_probe_net(args) -> int:
         _touch_last_used(cfg, alias)
         return EXIT_OK if any_online else 1
     finally:
-        client.close()
-
+        pass
 
 # --------------------------------------------------------------------------- #
 # Session management (writes v3 config)
@@ -1707,6 +1707,12 @@ def main(argv=None) -> int:
     finally:
         if not args.no_cleanup:
             registry.cleanup(dry_run=args.cleanup_dry_run)
+        client = getattr(args, "_client", None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
