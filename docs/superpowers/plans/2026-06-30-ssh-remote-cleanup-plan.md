@@ -277,10 +277,8 @@ def cmd_exec(args) -> int:
 
     registry = getattr(args, "_registry", None)
     remote_staging = f"{args.remote_staging_dir.rstrip('/')}/{args._run_id}"
-    if registry:
-        registry.add_remote(remote_staging)
 
-    # 在 client 建立后创建远端目录
+    # 在 client 建立后创建远端目录并注册
     ...
 ```
 
@@ -517,3 +515,5 @@ git push origin main
 
 - 无 TBD / TODO / "implement later" / "fill in details" / "similar to Task N"。
 - 每个步骤都有具体代码或命令。
+
+
