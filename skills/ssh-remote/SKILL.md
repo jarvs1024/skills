@@ -132,6 +132,59 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 
 保留 v1 高危命令门（`HIGH_RISK_PATTERNS`），分 critical / high 两级。critical 命令会强制要求 `--i-know` + 一次性 `RUN-XXXXXX` token。
 
+## AI 调用前确认清单（强制）
+
+> 本 skill 由 AI 在对话中调用。AI **必须**在调用前完成以下确认，**不得**擅自推断或默认执行。
+
+### 1. 环境信息不确定时，必须反问用户
+
+以下任一情况缺失或模糊时，AI 要停下来向用户确认或请求补充，不能直接猜：
+
+- 目标主机别名/地址未给出，或别名不在 `session list` 中
+- 用户说"那台机器"、"测试机"等不唯一指向
+- 目标主机密码未配置且用户未提供 `--password`
+- 用户命令里包含相对路径、通配符、环境变量等可能因主机不同而解析出错的片段
+- 不确定目标是 `lab` / `prod` / `internal` 等环境
+
+示例：
+
+> "你说‘在测试机上跑’，但配置里有 lab-nvme-01 / lab-nvme-02 / lab-sata-01。请确认具体是哪一台，或者我帮你列出所有主机。"
+
+### 2. 涉及服务器数据的删除/修改/重启，必须用户先确认
+
+以下操作在聊天中**必须**得到用户明确同意（口头/文字"可以"/"执行"/"确认"）后，AI 才能带 `--yes --i-know` 调用：
+
+- `rm` / `dd` / `mkfs` / `fdisk` / `wipefs` / `shred` / `truncate` 等删除/覆写数据
+- `chmod` / `chown` 大范围改权限
+- `systemctl stop/disable/mask/restart` / `reboot` / `shutdown` / `poweroff`
+- 写入 `/etc/*`、`/boot/*`、systemd unit、crontab、profile.d 等系统文件
+- `iptables` / `nft` / `firewall-cmd` 改防火墙
+- `passwd` / `userdel` / `usermod` / `groupdel` 改账号
+- 上传文件覆盖远端系统路径或重要配置文件
+- 任何对生产环境（prod）的 exec / upload
+
+> 禁止：用户只说"清理一下"，AI 就直接 `rm -rf`；用户只说"重启"，AI 就直接 `reboot`。
+
+### 3. 读-only / 诊断操作也要先确认目标
+
+`test`、`probe-net`、`download`、`session list`、`config show` 虽然不修改远端，但如果目标主机不确定，AI 仍应先确认：
+
+> "要查哪台主机的网络？"
+
+### 4. `--yes` 与 `--i-know` 的使用纪律
+
+- `--yes`：仅在用户**已经在当前对话中确认过目标主机**时使用
+- `--i-know`：仅在用户**已经在当前对话中确认过高危操作风险**时使用
+- 严禁：为了绕过确认流程而自动加 `--yes` / `--i-know`
+
+### 5. 批量操作更严格
+
+使用 `--sessions a,b,c` 或 `--all` 前，AI 必须：
+
+- 列出会受影响的主机清单
+- 说明命令/上传内容
+- 得到用户明确同意
+
 ## 密码安全提示
 
 > 配置文件含明文密码；务必：
@@ -151,6 +204,8 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 
 ## 自动化约定
 
+> 完整规则见上文"AI 调用前确认清单（强制）"。下面是速记版：
+
 - Codex / Claude 调用前应已在聊天里确认目标主机与命令。
 - 调用 `exec` / `upload` 时务必带上 `--yes` 与 `--i-know`（如已确认）。
 - 涉及 batch / 多主机时再用 `--sessions a,b,c` 或 `--all`，由 skill 走 batch 流程。
@@ -162,4 +217,4 @@ cd C:/Users/2268/.claude/skills/ssh-remote
 python -m pytest scripts/ -v
 ```
 
-期望：路径 / 约束 / 配置三类测试全部通过（当前 37 用例）。
+期望：路径 / 约束 / 配置 / 超时四类测试全部通过（当前 48 用例）。

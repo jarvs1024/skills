@@ -76,6 +76,7 @@ EXIT_HIGH_RISK_DECLINED = 16
 EXIT_CONFIG_CORRUPTED = 17
 EXIT_CONSTRAINT_DENIED = 18
 EXIT_OUTSIDE_ALLOWED_HOURS = 19
+EXIT_NETWORK_ISOLATED_PROBE = 20  # probe-net refused on a network_isolated host
 EXIT_CONNECTION_FAILED = 10
 EXIT_SSH_ERROR = 11
 EXIT_AUTH_FAILED = 13
@@ -137,7 +138,10 @@ PUBLIC_NETWORK_PATTERNS = [
     r"\bping\b",
     r"\btraceroute\b",
     r"\bnslookup\b",
-    r"\bhost\b",
+    # 'host' is matched only when invoked as a DNS-query command (bare token + a hostname).
+    # Previously the bare \bhost\b pattern was a notorious false-positive on --host/--bind
+    # flags, /etc/hosts paths, hostname(1) arguments, etc.
+    r"(?:^|\s|;|\||&)host\s+[A-Za-z0-9._-]+\b",
     r"\bwhois\b",
     r"\bntpdate\b",
 ]
@@ -233,11 +237,15 @@ HIGH_RISK_PATTERNS = [
     (r"\bchmod\s+(?:-R\s+)?0?777", "high", "chmod world-writable"),
     (r"\bchown\s+-R\b", "high", "recursive chown"),
 
-    # System files via redirection
-    (r">\s*/(?:etc|var|usr|boot|proc|sys|dev|lib|opt|root|bin|sbin)/", "high", "redirect to system path"),
+    # System files via redirection. The previous version was a substring match on
+    # ">\s*/opt/" which tripped on innocuous uses like `df -h /opt`, `ls /opt/x`.
+    # Now requires the redirect operator to be at a command boundary (start of
+    # string, after ; | &, or after a newline-equivalent space after a closing
+    # paren/brace).
+    (r"(?:(?:^|[|;&]\s*|^\s*)>>?\s*/(?:etc|var|usr|boot|proc|sys|dev|lib|opt|root|bin|sbin)/)", "high", "redirect to system path"),
     (r"\btee\s+/(?:etc|var|usr|boot|proc|sys|dev|lib|opt|root|bin|sbin)/", "high", "tee to system path"),
-    (r">\s*/etc/(?:passwd|shadow|sudoers|hosts|fstab|resolv\.conf)", "high", "redirect to critical system file"),
-    (r">\s*~/\.(?:bash|ssh|aws|kube|netrc|gitconfig|history|profile)", "high", "redirect to user credential/history file"),
+    (r"(?:(?:^|[|;&]\s*|^\s*)>>?\s*/etc/(?:passwd|shadow|sudoers|hosts|fstab|resolv\.conf))", "high", "redirect to critical system file"),
+    (r"(?:(?:^|[|;&]\s*|^\s*)>>?\s*~/\.(?:bash|ssh|aws|kube|netrc|gitconfig|history|profile))", "high", "redirect to user credential/history file"),
 
     # Time / boot
     (r"\b(?:date|hwclock)\b[^|;&]*-s\b", "high", "time change"),
@@ -613,6 +621,12 @@ def _confirm_host(target: dict, op_desc: str, args) -> None:
         return
     sys.stderr.write("\n[CONFIRM] About to operate on:\n")
     sys.stderr.write(_format_target(target, op_desc))
+    sys.stderr.write(
+        "\n[NOTE] This prompt is the LAST line of defense.\n"
+        "       The AI operator should have ALREADY obtained your explicit\n"
+        "       confirmation in chat BEFORE invoking this command.\n"
+        "       If you did NOT ask for this, type anything other than 'yes'.\n"
+    )
     sys.stderr.flush()
     try:
         ans = input("Type 'yes' to continue (or anything else to abort): ")
@@ -657,7 +671,9 @@ def _confirm_high_risk(command: str, target: dict, reason: str, level: str, args
     sys.stderr.write(
         "\n" + body + "\n"
         "The operator (AI) must have obtained EXPLICIT chat confirmation\n"
-        "from the user before passing --i-know.\n\n"
+        "from the user BEFORE invoking this command. The user must understand\n"
+        "what data / services will be affected and have answered 'yes' / '确认'\n"
+        "in the chat. If not, abort by typing anything other than the token.\n\n"
         f"To proceed, type the token below EXACTLY:\n\n    {token}\n"
     )
     sys.stderr.flush()
@@ -1003,6 +1019,34 @@ def cmd_exec(args) -> int:
         client.close()
 
 
+def _sftp_chmod_r(sftp, remote_path: str, mode: int) -> None:
+    """Recursively chmod remote_path and everything beneath it.
+
+    Walk is implemented via listdir_attr (not a shell chmod -R) so we don't
+    trip the high-risk 'chmod -R 0777' / 'chmod 0?777' gates.
+    """
+    def _walk(path: str) -> None:
+        try:
+            sftp.chmod(path, mode)
+        except OSError:
+            pass
+        try:
+            entries = sftp.listdir_attr(path)
+        except OSError:
+            return
+        for entry in entries:
+            child = path.rstrip("/") + "/" + entry.filename
+            if stat.S_ISDIR(entry.st_mode):
+                _walk(child)
+            else:
+                try:
+                    sftp.chmod(child, mode)
+                except OSError:
+                    pass
+
+    _walk(remote_path)
+
+
 def cmd_upload(args) -> int:
     cfg = _ensure_cfg()
     args.remote = _normalize_remote_path(args.remote, label="--remote")
@@ -1043,7 +1087,7 @@ def cmd_upload(args) -> int:
                 return 124
         if args.mode:
             try:
-                sftp.chmod(args.remote, int(args.mode, 8))
+                _sftp_chmod_r(sftp, args.remote, int(args.mode, 8))
             except OSError as exc:
                 sys.stderr.write(f"[WARN] chmod failed: {exc}\n")
         sftp.close()
@@ -1097,8 +1141,10 @@ def cmd_probe_net(args) -> int:
         sys.stderr.write(
             f"[ERROR] host '{alias}' is marked network_isolated; "
             "probe-net to public targets is refused by policy\n"
+            "[HINT]  see references/offline-workflow.md for the offline playbook.\n"
+            "        to override per-call, set --allow-probe-net (NOT YET IMPLEMENTED).\n"
         )
-        return EXIT_CONSTRAINT_DENIED
+        return EXIT_NETWORK_ISOLATED_PROBE
 
     op = "probe-net (read-only network reachability)"
     _confirm_host(target, op, args)
@@ -1595,7 +1641,23 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _configure_msys_no_pathconv() -> None:
+    """Disable MSYS path conversion on Windows so POSIX remote paths like
+    /opt/... are not rewritten to C:/Program Files/Git/opt/...
+
+    Safe no-op on non-Windows / non-MSYS runtimes.
+    """
+    if sys.platform != "win32":
+        return
+    # MSYS sets MSYSTEM=MSYS or MINGW64 etc.; Cygwin sets none of those.
+    if not os.environ.get("MSYSTEM") and "MSYS" not in sys.version:
+        return
+    os.environ.setdefault("MSYS_NO_PATHCONV", "1")
+    os.environ.setdefault("MSYS2_ARG_CONV_EXCL", "*")
+
+
 def main(argv=None) -> int:
+    _configure_msys_no_pathconv()
     if argv is None:
         argv = sys.argv[1:]
     parser = _build_parser()

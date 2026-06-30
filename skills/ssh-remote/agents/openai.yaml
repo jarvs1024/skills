@@ -33,27 +33,63 @@ notes: |
   密码只从 --password 或 hosts[alias].password 来；不再读 SSH_PASSWORD_* 环境变量。
   network_isolated=true 的主机在 exec/upload 命中公网特征（curl/wget/yum/apt/pip install/...）时会被直接拒绝。
 
+  ===== AI 调用纪律（强制） =====
+  本 skill 由 AI 在对话中调用。AI 必须遵守：
+
+  1. 环境信息不确定时必须反问用户：主机别名模糊（"那台机器"/"测试机"）、
+     主机不在 session list 中、密码未配置、命令含相对路径或通配符、
+     不清楚目标环境（lab/prod/internal）—— 任何一项不确定就先停下来问用户，
+     不要擅自猜测。
+
+  2. 数据删除/修改/重启类操作必须用户先确认：
+     rm/dd/mkfs/fdisk/wipefs/shred/truncate、chmod/chown 大范围改权限、
+     systemctl stop/disable/mask/restart、reboot/shutdown/poweroff、
+     写入 /etc/* /boot/* / crontab / profile.d、iptables/nft/firewall-cmd、
+     passwd/userdel/usermod/groupdel、覆盖上传远端系统路径、
+     任何 prod 环境的 exec/upload —— 这些必须在聊天中得到用户明确同意，
+     才能带 --yes --i-know 调用。
+
+  3. 读-only 操作（test/probe-net/download/session list/config show）若
+     目标主机不确定，AI 也要先问用户。
+
+  4. --yes 与 --i-know 的纪律：
+     仅当用户已在当前对话中确认过目标主机/高危操作风险时才能加。
+     严禁为了"省事"自动加 --yes --i-know。
+
+  5. 批量（--sessions a,b,c / --all）前 AI 必须列出受影响主机、说明命令、
+     取得用户同意。
+
+  6. 提示用户可用的反问句式（参考）：
+     - "你说的是哪一台？配置里有 X / Y / Z"
+     - "这个命令会 rm -rf，你确认执行吗？"
+     - "这是 prod 环境，你确认要继续吗？"
+
 examples:
   - |
-    # 列出现有主机
+    # 列出现有主机（不修改任何东西，可以直接用）
     python scripts/ssh_ops.py session list
   - |
-    # 添加主机并写明文密码到配置
+    # 添加主机（AI 必须在聊天中向用户确认过：主机 IP / 用户名 / 密码 / 用途）
     python scripts/ssh_ops.py session add lab-nvme-01 \
       --host 192.168.10.21 --port 22 --user tester --password SECRET \
       --env lab --label "NVMe 测试机 01"
   - |
-    # 给 prod 环境设置只读 + 时间窗口
+    # 给 prod 环境设置只读 + 时间窗口（修改约束，AI 必须先告知用户影响）
     python scripts/ssh_ops.py config env add prod --desc "生产环境"
     python scripts/ssh_ops.py config env set-constraints prod \
       --read-only true --require-double-confirm true \
       --denied-patterns reboot shutdown --allowed-hours 09:00-18:00
   - |
-    # 远端 test
-    python scripts/ssh_ops.py test --session lab-nvme-01 --yes
+    # 远端 test —— AI 必须已与用户确认过主机
+    # 注意：全局参数必须放在子命令前
+    python scripts/ssh_ops.py --session lab-nvme-01 --yes test
   - |
-    # 远端 exec
-    python scripts/ssh_ops.py exec --session lab-nvme-01 --yes -- "uname -a"
+    # 远端 exec —— 安全的只读命令，AI 仍需用户已确认主机
+    python scripts/ssh_ops.py --session lab-nvme-01 --yes exec -- "uname -a"
   - |
-    # 批量 exec
-    python scripts/ssh_ops.py exec --all --yes -- "uptime"
+    # 批量 exec —— AI 必须先列主机清单并取得用户同意
+    python scripts/ssh_ops.py --all --yes -- "uptime"
+  - |
+    # 高危操作 —— AI 必须先在聊天中确认风险，再带 --i-know
+    python scripts/ssh_ops.py --session lab-nvme-01 --yes --i-know exec -- \
+      "rm -rf /tmp/cache/*"

@@ -18,8 +18,10 @@
 | `--trust-host` | 自动信任未知 host key（仅首次连陌生主机） |
 | `--host-key PATH` | 显式指定 known_hosts 文件 |
 | `--insecure` | 接受任何 host key（**危险**，慎用） |
-| `--yes` | 跳过主机确认；调用前**必须**已在聊天里确认 |
-| `--i-know` | 跳过高/极高危 token 确认；调用前**必须**已在聊天里确认风险 |
+| `--yes` | 跳过主机确认；**仅当用户已在当前对话中确认过目标主机**才能加 |
+| `--i-know` | 跳过高/极高危 token 确认；**仅当用户已在当前对话中确认过风险**才能加 |
+| `--cmd-timeout N` | 远程命令 wall-clock deadline，默认 600s；超时返回 124。<br>**位置**：必须放在子命令**之前**（全局参数）。`exec --cmd-timeout N 'cmd'` 会被 `exec` 子解析器当作未知参数而失败。 |
+| `--transfer-timeout N` | upload/download SFTP deadline，默认 600s；超时返回 124 |
 
 ## 密码读取优先级（高 → 低）
 
@@ -162,7 +164,7 @@
 | --- | --- | --- |
 | `read_only` | 环境/主机 | exec / upload 入口 |
 | `allowed_hours` | 环境/主机 | exec / upload 入口 |
-| `network_isolated` | 环境/主机 | exec / upload 入口（命中公网特征即拒绝）；probe-net 仅 WARN |
+| `network_isolated` | 环境/主机 | exec / upload 入口（命中公网特征即拒绝）；probe-net 直接拒绝执行 |
 | `denied_patterns` | 环境/主机 | exec 命令字符串 |
 | `require_double_confirm` | 环境/主机 | exec 命令字符串 |
 | `HIGH_RISK_PATTERNS` | 内置 | exec 命令字符串 |
@@ -172,3 +174,48 @@
 ## 故障诊断
 
 按症状分类的 runbook 详见 `references/troubleshooting.md`。
+
+## AI 调用纪律（强制）
+
+> 本 skill 由 AI 在对话中调用。AI **必须**遵守；用户在终端看到的 confirm / token 提示只是"最后防线"。
+
+### 1. 信息不确定 → 反问，不擅自猜
+
+主机别名不在 `session list` / 用户说"那台机器" / 命令含相对路径 / 不清楚环境 — 任一项不确定，AI 必须停下来向用户确认或请求补充。典型反问句式：
+
+- "你说的是哪一台？配置里有 X / Y / Z"
+- "目标密码没配，需要我先问你要还是让你现场输入？"
+- "这是 lab / prod / internal？"
+
+### 2. 数据删除/修改/重启类 → 用户先确认
+
+`rm -rf` / `dd` / `mkfs` / `wipefs` / `shred` / 大范围 chmod / systemctl stop|disable|mask|restart / reboot / shutdown / 写 `/etc/*`、crontab、profile.d / iptables 改防火墙 / passwd / userdel / 覆盖上传远端系统路径 / 任何 prod exec/upload —— 必须在聊天中得到用户明确同意，AI 才能带 `--yes --i-know` 调用。
+
+禁止：
+
+- 用户只说"清理一下"，AI 就直接 `rm -rf`
+- 用户只说"重启"，AI 就直接 `reboot`
+- 用户没确认，AI 自动加 `--yes --i-know`
+
+### 3. `--yes` / `--i-know` 的纪律
+
+| 参数 | 使用条件 |
+| --- | --- |
+| `--yes` | 用户已在当前对话中确认过目标主机 |
+| `--i-know` | 用户已在当前对话中确认过高危操作风险，并明确说要执行 |
+
+### 4. 批量（--sessions a,b,c / --all）
+
+- 先列出会受影响的主机清单
+- 说明要跑的命令 / 要上传的内容
+- 取得用户明确同意
+
+### 5. 终止条件
+
+AI 在以下情况下**必须**终止调用并反问用户：
+
+- 配置里找不到主机别名
+- 主机未配置密码，且 `--password` 也没传
+- 风险模式命中但用户没确认
+- 约束（read_only / denied_patterns / allowed_hours / network_isolated）拒绝
+- 远端返回非预期结果（例如 `uname -a` 显示的 OS 与预期不符）
