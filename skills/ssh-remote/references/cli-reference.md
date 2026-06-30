@@ -22,6 +22,10 @@
 | `--i-know` | 跳过高/极高危 token 确认；**仅当用户已在当前对话中确认过风险**才能加 |
 | `--cmd-timeout N` | 远程命令 wall-clock deadline，默认 600s；超时返回 124。<br>**位置**：必须放在子命令**之前**（全局参数）。`exec --cmd-timeout N 'cmd'` 会被 `exec` 子解析器当作未知参数而失败。 |
 | `--transfer-timeout N` | upload/download SFTP deadline，默认 600s；超时返回 124 |
+| `--no-cleanup` | 关闭自动清理（仍可手动清理或重跑） |
+| `--cleanup-dry-run` | 只打印会清理的路径，不删除 |
+| `--remote-staging-dir DIR` | 远端 staging 基路径，默认 `/tmp` |
+| `--local-staging-dir DIR` | 本地 staging 基路径，默认 `~/.ssh-remote/tmp` |
 
 ## 密码读取优先级（高 → 低）
 

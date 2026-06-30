@@ -18,19 +18,47 @@ def run_id() -> str:
 
 
 def is_safe_to_delete(path: str) -> bool:
+    """Return True only if the path is under an obviously temporary location.
+
+    Remote paths (starting with '/') must be under /tmp/.
+    Local paths must not be Windows system directories or the user home itself.
+    """
     if path.startswith("/"):
+        # Remote POSIX path: must be under /tmp/
         p = PurePosixPath(path)
-    else:
-        p = Path(path).expanduser().resolve()
         if len(p.parts) <= 1:
             return False
+        if ".." in p.parts:
+            return False
+        s = str(p)
+        if not s.startswith("/tmp/"):
+            return False
+        for prefix in _DENY_PREFIXES:
+            if s.startswith(prefix + "/") or s == prefix:
+                return False
+        return True
+    # Local path: Windows-aware safety checks
+    p = Path(path).expanduser().resolve()
     if len(p.parts) <= 1:
         return False
     if ".." in p.parts:
         return False
     s = str(p)
-    for prefix in _DENY_PREFIXES:
-        if s.startswith(prefix + "/") or s == prefix:
+    lower = s.lower()
+    # Reject user home directory itself
+    try:
+        home = str(Path.home().resolve())
+        if s == home or lower == home.lower():
+            return False
+    except Exception:
+        pass
+    # Reject Windows system directories
+    for sys_dir in (
+        "c:\\windows", "c:\\program files", "c:\\program files (x86)",
+        "c:\\users\\all users", "c:\\users\\public", "c:\\users\\default",
+        "c:\\perflogs", "c:\\programdata",
+    ):
+        if lower == sys_dir or lower.startswith(sys_dir + "\\"):
             return False
     return True
 
@@ -100,3 +128,4 @@ def _sftp_rm_r(sftp, remote_path: str) -> None:
                 except IOError:
                     pass
         sftp.rmdir(remote_path)
+

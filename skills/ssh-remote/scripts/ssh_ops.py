@@ -1105,6 +1105,11 @@ def cmd_upload(args) -> int:
                 sys.stderr.write(f"[WARN] chmod failed: {exc}\n")
         sftp.close()
         sys.stdout.write(f"[OK] upload complete: {args.remote}\n")
+        registry = getattr(args, "_registry", None)
+        if registry:
+            remote_staging = f"{args.remote_staging_dir.rstrip('/')}/{args._run_id}"
+            if args.remote == remote_staging or args.remote.startswith(remote_staging + "/"):
+                registry.add_remote(client, args.remote)
         _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
@@ -1138,6 +1143,15 @@ def cmd_download(args) -> int:
                 return 124
         sftp.close()
         sys.stdout.write(f"[OK] download complete: {local_path}\n")
+        registry = getattr(args, "_registry", None)
+        if registry:
+            try:
+                local_staging = Path(args.local_staging_dir).expanduser().resolve() / args._run_id
+                resolved_local = local_path.expanduser().resolve()
+                if resolved_local == local_staging or local_staging in resolved_local.parents:
+                    registry.add_local(resolved_local)
+            except Exception:
+                pass
         _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:

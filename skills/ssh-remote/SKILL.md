@@ -128,6 +128,25 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 | 19 | 时间窗口外 |
 | 其他 | 远端命令自身的 exit code |
 
+## 临时文件清理
+
+ssh-remote 默认在执行结束后清理本次进程产生的临时文件，无论成功或失败。
+
+- 远端 staging 目录：`/tmp/ssh-remote-{run_id}/`（可通过 `--remote-staging-dir` 修改基路径）
+- 本地 staging 目录：`~/.ssh-remote/tmp/{run_id}/`（可通过 `--local-staging-dir` 修改）
+- `exec` 命令自动创建 `/tmp/ssh-remote-{run_id}/` 并将路径注入到命令的 `SSH_REMOTE_TMP` 环境变量；命令可直接用此目录暂存文件
+- `upload` / `download` 当目标路径落在 staging 目录内时会被登记到清理列表
+- 默认开启；失败时仍尝试清理（清理失败只 warn，不改变主命令退出码）
+- 使用 `--no-cleanup` 保留临时文件以便排查
+- 使用 `--cleanup-dry-run` 只打印会清理的路径，不删除
+
+安全护栏：
+
+- 远端清理路径必须以 `/tmp/` 开头；`/etc` `/usr` `/home` `/root` 等系统目录拒绝清理
+- 本地清理路径禁止是 Windows 系统目录（`C:\Windows` 等）或用户主目录本身
+- 含 `..` 的路径或解析后跳出 staging 的路径被拒绝
+
+
 ## 风险模式
 
 保留 v1 高危命令门（`HIGH_RISK_PATTERNS`），分 critical / high 两级。critical 命令会强制要求 `--i-know` + 一次性 `RUN-XXXXXX` token。
