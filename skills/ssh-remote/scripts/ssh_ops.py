@@ -54,6 +54,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path, PurePosixPath
+from cleanup import CleanupRegistry, run_id
 
 # Optional dependency: paramiko is required only when connecting.
 try:
@@ -1541,6 +1542,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="skip high/critical risk token confirmation")
     p.add_argument("--insecure", action="store_true",
                    help="accept any host key (dangerous)")
+    p.add_argument("--no-cleanup", action="store_true",
+                   help="skip automatic cleanup of temporary files")
+    p.add_argument("--cleanup-dry-run", action="store_true",
+                   help="print temporary paths that would be cleaned")
+    p.add_argument("--remote-staging-dir", default="/tmp",
+                   help="remote base directory for staging (default: /tmp)")
+    p.add_argument("--local-staging-dir", default=None,
+                   help="local base directory for staging (default: ~/.ssh-remote/tmp)")
     p.add_argument("--transfer-timeout", type=int, default=600,
                    help="SFTP upload/download wall-clock deadline, seconds (default 600)")
     p.add_argument("--cmd-timeout", type=int, default=600,
@@ -1662,7 +1671,16 @@ def main(argv=None) -> int:
         argv = sys.argv[1:]
     parser = _build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    registry = CleanupRegistry()
+    args._registry = registry
+    args._run_id = run_id()
+    if args.local_staging_dir is None:
+        args.local_staging_dir = str(Path.home() / ".ssh-remote" / "tmp")
+    try:
+        return args.func(args)
+    finally:
+        if not args.no_cleanup:
+            registry.cleanup(dry_run=args.cleanup_dry_run)
 
 
 if __name__ == "__main__":

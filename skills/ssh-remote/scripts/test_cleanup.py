@@ -21,3 +21,33 @@ def test_cleanup_registry_local_paths(tmp_path):
     reg.add_local(p)
     reg.cleanup()
     assert not p.exists()
+
+
+def test_cleanup_registry_dry_run(tmp_path):
+    p = tmp_path / "junk.txt"
+    p.write_text("x")
+    reg = CleanupRegistry()
+    reg.add_local(p)
+    reg.cleanup(dry_run=True)
+    assert p.exists()
+
+
+def test_cleanup_registry_remote_dry_run():
+    reg = CleanupRegistry()
+    reg.add_remote(object(), "/tmp/ssh-remote-abc")
+    reg.cleanup(dry_run=True)
+
+
+def test_cli_accepts_cleanup_flags():
+    from ssh_ops import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args([
+        "--no-cleanup", "--cleanup-dry-run",
+        "--remote-staging-dir", "/tmp2",
+        "--local-staging-dir", "/tmp3",
+        "test",
+    ])
+    assert args.no_cleanup is True
+    assert args.cleanup_dry_run is True
+    assert args.remote_staging_dir == "/tmp2"
+    assert args.local_staging_dir == "/tmp3"
