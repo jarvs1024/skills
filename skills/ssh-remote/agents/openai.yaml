@@ -1,0 +1,59 @@
+name: ssh-remote
+version: 3
+description: |
+  SSH 远程操作 skill。所有主机信息统一存在 ~/.config/ssh_remote_config.json，
+  支持环境分组约束、主机级只读/网络隔离模式、明文密码保存；调用方为 scripts/ssh_ops.py。
+
+triggers:
+  - 连到
+  - ssh
+  - 在 ... 上跑
+  - 把 ... 上传到
+  - 从 ... 拉
+  - 查 ... 网络
+  - 添加主机
+  - 新主机
+  - 列出主机
+  - 查主机
+  - 导出配置
+
+entrypoint:
+  command: python
+  args:
+    - scripts/ssh_ops.py
+
+notes: |
+  本 skill 在客户端完成参数解析与远端交互，不对外暴露网络服务。
+  触发词解析由调用方完成；参数透传给 scripts/ssh_ops.py。
+  配置文件位置：
+    1. $SSHR_CONFIG_DIR/ssh_remote_config.json
+    2. $XDG_CONFIG_HOME/ssh_remote_config.json
+    3. ~/.config/ssh_remote_config.json
+  完整 schema 与约束说明见 SKILL.md。
+  密码只从 --password 或 hosts[alias].password 来；不再读 SSH_PASSWORD_* 环境变量。
+  network_isolated=true 的主机在 exec/upload 命中公网特征（curl/wget/yum/apt/pip install/...）时会被直接拒绝。
+
+examples:
+  - |
+    # 列出现有主机
+    python scripts/ssh_ops.py session list
+  - |
+    # 添加主机并写明文密码到配置
+    python scripts/ssh_ops.py session add lab-nvme-01 \
+      --host 192.168.10.21 --port 22 --user tester --password SECRET \
+      --env lab --label "NVMe 测试机 01"
+  - |
+    # 给 prod 环境设置只读 + 时间窗口
+    python scripts/ssh_ops.py config env add prod --desc "生产环境"
+    python scripts/ssh_ops.py config env set-constraints prod \
+      --read-only true --require-double-confirm true \
+      --denied-patterns reboot shutdown --allowed-hours 09:00-18:00
+  - |
+    # 远端 test
+    python scripts/ssh_ops.py test --session lab-nvme-01 --yes
+  - |
+    # 远端 exec
+    python scripts/ssh_ops.py exec --session lab-nvme-01 --yes -- "uname -a"
+  - |
+    # 批量 exec
+    python scripts/ssh_ops.py exec --all --yes -- "uptime"

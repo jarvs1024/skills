@@ -30,24 +30,28 @@
 **适用于所有客户端** (Codex / Claude Code / 任何支持 skills 的 agent):
 
 ```bash
-# 1. 下载 zip (47 KB)
+# 1. 下载 zip
 curl -L -o /tmp/skills.zip https://github.com/jarvs1024/skills/archive/refs/heads/main.zip
 
-# 2. 解压, 得到 skills-main/skills/weekly-report/
+# 2. 解压, 得到 skills-main/skills/{weekly-report,ssh-remote}/
 unzip /tmp/skills.zip -d /tmp/
 
 # 3. 拷到目标目录 (任选 / 全选, 拷到哪个就用哪个客户端)
 mkdir -p ~/.codex/skills ~/.claude/skills ~/.agents/skills
-cp -R /tmp/skills-main/skills/weekly-report ~/.codex/skills/weekly-report
-cp -R /tmp/skills-main/skills/weekly-report ~/.claude/skills/weekly-report
-cp -R /tmp/skills-main/skills/weekly-report ~/.agents/skills/weekly-report
+for s in weekly-report ssh-remote; do
+  cp -R /tmp/skills-main/skills/$s ~/.codex/skills/$s
+  cp -R /tmp/skills-main/skills/$s ~/.claude/skills/$s
+  cp -R /tmp/skills-main/skills/$s ~/.agents/skills/$s
+done
 
-# 4. 装依赖 (weekly-report 需要 openpyxl)
-pip3 install --user openpyxl
+# 4. 装依赖 (weekly-report -> openpyxl; ssh-remote -> paramiko)
+pip3 install --user openpyxl paramiko
 
 # 5. 验证
 python3 ~/.codex/skills/weekly-report/scripts/smoke_test.py
 # 期望: 通过 13 / 失败 0
+python3 -m pytest ~/.codex/skills/ssh-remote/scripts -v
+# 期望: 37 passed
 ```
 
 **Windows PowerShell**:
@@ -60,22 +64,25 @@ Invoke-WebRequest -Uri "https://github.com/jarvs1024/skills/archive/refs/heads/m
 Expand-Archive -Path "$env:TEMP\skills.zip" -DestinationPath "$env:TEMP\"
 
 # 3. 拷到目标目录 (任选)
-$skill = "$env:TEMP\skills-main\skills\weekly-report"
-Copy-Item -Recurse $skill "$env:USERPROFILE\.codex\skills\weekly-report"
-Copy-Item -Recurse $skill "$env:USERPROFILE\.claude\skills\weekly-report"
-Copy-Item -Recurse $skill "$env:USERPROFILE\.agents\skills\weekly-report"
+foreach ($s in @('weekly-report','ssh-remote')) {
+  $src = Join-Path $env:TEMP "skills-main\skills\$s"
+  Copy-Item -Recurse $src "$env:USERPROFILE\.codex\skills\$s"
+  Copy-Item -Recurse $src "$env:USERPROFILE\.claude\skills\$s"
+  Copy-Item -Recurse $src "$env:USERPROFILE\.agents\skills\$s"
+}
 
 # 4. 装依赖
-pip install openpyxl
+pip install openpyxl paramiko
 
 # 5. 验证
 python $env:USERPROFILE\.codex\skills\weekly-report\scripts\smoke_test.py
+python -m pytest $env:USERPROFILE\.codex\skills\ssh-remote\scripts -v
 ```
 
 **完成后**:
 
-- **Codex**: 重启 Codex app / 新开 thread, 新会话里 "Available skills" 会出现 weekly-report, 自动匹配触发
-- **Claude Code**: 重启 / 新开会话, 输入 `/weekly-report` 触发
+- **Codex**: 重启 Codex app / 新开 thread, 新会话里 "Available skills" 会出现 weekly-report 和 ssh-remote, 自动匹配触发
+- **Claude Code**: 重启 / 新开会话, 输入 `/weekly-report` 或 `/ssh-remote` 触发
 - **其它 agent**: 启动时按各自约定加载 `~/.codex/skills/` 或 `~/.claude/skills/` 或 `~/.agents/skills/`
 
 ## 可用 skill 列表
@@ -83,6 +90,7 @@ python $env:USERPROFILE\.codex\skills\weekly-report\scripts\smoke_test.py
 | Skill | 简介 | 主要场景 |
 |---|---|---|
 | [**weekly-report**](skills/weekly-report/) | 周报生成 + 工作流水账, 输出公司风 .xlsx | 每天随手记工作 / 周四一键出周报 / 修改历史记录 |
+| [**ssh-remote**](skills/ssh-remote/) | SSH 远程主机管理: 配置/连接/上传/下载/网络探测 | 在测试服务器执行命令、上传压测包、批量跑脚本、按环境配置只读/时间窗口约束 |
 
 > 后续会持续添加新 skill, 上表会同步更新。
 
@@ -104,6 +112,45 @@ python $env:USERPROFILE\.codex\skills\weekly-report\scripts\smoke_test.py
 | "再写一次" | `/weekly-report` + "再写一次" | 重生成, 旧版备份为 .bak |
 
 详细规则看 [weekly-report/SKILL.md](skills/weekly-report/SKILL.md)。
+
+### ssh-remote 使用示例
+
+| 你说 (Codex 自动触发) | 你输入 (Claude 手动) | 行为 |
+|---|---|---|
+| "连到 lab-nvme-01" / "ssh lab-nvme-01" | `/ssh-remote` + "连到 lab-nvme-01" | 连一次 SSH, 打印 host key + uname |
+| "在 lab-nvme-01 上跑 uname -a" | `/ssh-remote` + "在 lab-nvme-01 上跑 uname -a" | 远端 exec 单条命令 |
+| "把 D:\pkg 传到 lab-nvme-01 的 /tmp/" | `/ssh-remote` + "把 ... 传到 ..." | SFTP 上传 (自动 mkdir -p) |
+| "从 lab-nvme-01 拉 /var/log/messages" | `/ssh-remote` + "从 ... 拉 ..." | SFTP 下载 |
+| "查 lab-nvme-01 网络" | `/ssh-remote` + "查 ... 网络" | probe-net, 默认探 github/baidu/pypi |
+| "添加主机 lab-nvme-02, IP 192.168.10.22, 用户 tester" | `/ssh-remote` + "添加主机 ..." | session add 写入配置 |
+| "列出主机" / "导出配置" | `/ssh-remote` + "列出主机" / "导出配置" | session list / config show (密码遮罩) |
+
+详细参数、退出码、风险模式看 [ssh-remote/SKILL.md](skills/ssh-remote/SKILL.md) 和 [cli-reference.md](skills/ssh-remote/references/cli-reference.md)。
+
+### 配置与凭据：ssh-remote
+
+配置文件按以下优先级解析：
+
+1. `$SSHR_CONFIG_DIR/ssh_remote_config.json`
+2. `$XDG_CONFIG_HOME/ssh_remote_config.json`
+3. `~/.config/ssh_remote_config.json` (Windows: `%USERPROFILE%\.config\ssh_remote_config.json`)
+
+**密码以明文存储在该 JSON 文件里**：
+
+- POSIX: 启动时会校验文件权限, 若过宽会打印警告. 务必保持 `0600`.
+- Windows: 建议把目录加入 EFS 或限制 ACL. 切勿提交到 Git.
+
+约束机制 (defaults < environment < host, 后者覆盖前者):
+
+| 字段 | 作用 |
+| --- | --- |
+| `read_only` | 禁止 exec/upload, 但 test/download/probe-net 仍可用 |
+| `allowed_hours` | 本地时间窗口 (如 `"09:00-18:00"`), 窗外拒绝 exec/upload |
+| `network_isolated` | 内网隔离; exec/upload 命中公网特征 (curl/wget/yum/apt/pip install/...) 直接拒绝 |
+| `denied_patterns` | 正则列表, 命令匹配任一即拒绝 (退出码 18) |
+| `require_double_confirm` | 每次 exec 都需一次性 RUN-XXXXXX token |
+
+测试服务器通常在内网隔离, 推荐第一次连上时先 `probe-net`, 然后按 [offline-workflow.md](skills/ssh-remote/references/offline-workflow.md) 走 "本地下载 → 上传 → 远端安装" 套路。
 
 ### 数据目录与覆盖方式 weekly-report
 
@@ -240,11 +287,21 @@ $env:WEEKLY_NOTES_DIR = "C:\Users\<用户>\Documents\obsidian-notes\WeeklyNotes"
 ├── README.md                       # 本文件
 ├── .gitignore                      # 排除 __pycache__/ 等
 └── skills/
-    └── weekly-report/              # weekly-report skill (Codex + Claude 通用)
+    ├── weekly-report/              # weekly-report skill (Codex + Claude 通用)
+    │   ├── SKILL.md
+    │   ├── agents/openai.yaml
+    │   ├── references/
+    │   └── scripts/
+    └── ssh-remote/                 # ssh-remote skill (Codex + Claude 通用)
         ├── SKILL.md
         ├── agents/openai.yaml
         ├── references/
+        │   ├── cli-reference.md
+        │   ├── offline-workflow.md
+        │   └── troubleshooting.md
         └── scripts/
+            ├── ssh_ops.py          # 主入口: test / exec / upload / download / probe-net / session / config
+            └── test_*.py           # 37 个 pytest 用例 (路径/约束/配置三类)
 ```
 
 ## 依赖
@@ -252,6 +309,7 @@ $env:WEEKLY_NOTES_DIR = "C:\Users\<用户>\Documents\obsidian-notes\WeeklyNotes"
 | Skill | Python 包 | 命令 |
 |---|---|---|
 | weekly-report | `openpyxl` | `pip3 install --user openpyxl` |
+| ssh-remote | `paramiko` (含传递依赖 `cryptography`) | `pip3 install --user paramiko` |
 
 ## 许可
 
