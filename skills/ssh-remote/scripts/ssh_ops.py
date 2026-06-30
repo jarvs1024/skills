@@ -824,7 +824,7 @@ def _build_client(target: dict, args):
 # --------------------------------------------------------------------------- #
 # Streaming / SFTP utilities
 # --------------------------------------------------------------------------- #
-def _run_and_print(client, command: str, timeout: int = 300) -> int:
+def _run_and_print(client, command: str, timeout: int = 300, env: dict | None = None) -> int:
     """Run a remote command, stream stdout/stderr, return its exit code.
 
     Two layers of timeout protection:
@@ -834,6 +834,8 @@ def _run_and_print(client, command: str, timeout: int = 300) -> int:
          timer doesn't fire (e.g. the channel is stuck on a half-open socket).
     """
     merged_env = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    if env:
+        merged_env.update(env)
     stdin, stdout, stderr = client.exec_command(
         command, timeout=timeout, environment=merged_env
     )
@@ -1000,6 +1002,9 @@ def cmd_exec(args) -> int:
     alias = target["session"] or args.session or ""
     _check_constraints(cfg, alias, "exec", command=args.command)
 
+    remote_staging = f"{args.remote_staging_dir.rstrip('/')}/{args._run_id}"
+    registry = getattr(args, "_registry", None)
+
     op = f"exec {args.command!r}"
     reason, level = _classify_exec_risk(args.command)
     if reason:
@@ -1012,7 +1017,14 @@ def cmd_exec(args) -> int:
 
     client = _build_client(target, args)
     try:
-        rc = _run_and_print(client, args.command, timeout=args.cmd_timeout)
+        mkdir_cmd = f"mkdir -p {shlex.quote(remote_staging)}"
+        mkdir_rc = _run_and_print(client, mkdir_cmd, timeout=args.timeout)
+        if mkdir_rc == 0 and registry:
+            registry.add_remote(client, remote_staging)
+        elif mkdir_rc != 0:
+            sys.stderr.write(f"[WARN] failed to create remote staging dir {remote_staging}; continuing without cleanup for this exec\n")
+        env = {"SSH_REMOTE_TMP": remote_staging} if mkdir_rc == 0 else None
+        rc = _run_and_print(client, args.command, timeout=args.cmd_timeout, env=env)
         if rc == 0:
             _touch_last_used(cfg, alias)
         return rc
