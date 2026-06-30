@@ -26,8 +26,8 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 
 按以下优先级解析：
 
-1. `$SSHR_CONFIG_DIR/ssh-remote_config.json`
-2. `$XDG_CONFIG_HOME/ssh-remote_config.json`
+1. `$SSHR_CONFIG_DIR/ssh_remote_config.json`
+2. `$XDG_CONFIG_HOME/ssh_remote_config.json`
 3. `~/.config/ssh_remote_config.json`（Windows 为 `%USERPROFILE%\.config\ssh_remote_config.json`）
 
 ## 配置 schema（v3）
@@ -86,7 +86,7 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 | `require_double_confirm` | bool | 为 `true` 时，任何 `exec` 都需先确认主机再输入一次性 token |
 | `denied_patterns` | list[str] | 正则列表；命令匹配任一正则即拒绝，退出码 18 |
 | `allowed_hours` | str \| null | `"HH:MM-HH:MM"` 本地时间窗口；非窗口期内 `exec`/`upload` 拒绝，退出码 19 |
-| `network_isolated` | bool | 主机/环境处于内网隔离；exec/upload 命令若显式需要公网（curl/wget/yum/apt/pip install/...）会被直接拒绝，退出码 18；`probe-net` 给出 WARN 但不阻断连接 |
+| `network_isolated` | bool | 主机/环境处于内网隔离；exec/upload 命令若显式需要公网（curl/wget/yum/apt/pip install/...）会被直接拒绝，退出码 18；`probe-net` 直接拒绝执行（避免触发出口探测），退出码 18 |
 
 ## 密码读取优先级
 
@@ -138,7 +138,7 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 
 - POSIX：确认文件权限为 0600（启动时若检测到过宽会打印警告）
 - Windows：建议将该文件所在目录加入 EFS 或限制 ACL
-- 共享主机：慎用 `--password` 参数；优先使用环境变量或 key-file
+- 共享主机：慎用 `--password` 参数；优先使用 key-file
 - 切勿把配置文件提交到 Git 仓库或上传到任何位置
 
 ## 离线 / 内网
@@ -162,4 +162,4 @@ cd C:/Users/2268/.claude/skills/ssh-remote
 python -m pytest scripts/ -v
 ```
 
-期望：路径 / 约束 / 配置三类测试全部通过（当前 34 用例）。
+期望：路径 / 约束 / 配置三类测试全部通过（当前 37 用例）。

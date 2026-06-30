@@ -363,10 +363,19 @@ def _save_cfg(cfg: dict) -> None:
     path = _cfg_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    except Exception:
+        # Don't leave a half-written tmp file behind on crash / disk-full.
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
     _restrict_cfg_permission(path)
 
 
@@ -581,6 +590,24 @@ def _format_target(target: dict, op_desc: str) -> str:
     )
 
 
+def _touch_last_used(cfg: dict, alias: str) -> None:
+    """Persist the last_used timestamp for an alias after a successful op.
+
+    Failures here must not propagate: a stale timestamp is acceptable, but a
+    broken connection trace is not.
+    """
+    if not alias:
+        return
+    entry = cfg.get("hosts", {}).get(alias)
+    if not entry:
+        return
+    entry["last_used"] = _now_iso()
+    try:
+        _save_cfg(cfg)
+    except OSError as exc:
+        sys.stderr.write(f"[WARN] could not persist last_used for '{alias}': {exc}\n")
+
+
 def _confirm_host(target: dict, op_desc: str, args) -> None:
     if getattr(args, "yes", False):
         return
@@ -681,8 +708,11 @@ def _resolve_target(args) -> dict:
             if auth.get("type") == "key-file" and auth.get("path"):
                 args.key_file = auth["path"]
 
-        cfg["hosts"][args.session]["last_used"] = _now_iso()
-        _save_cfg(cfg)
+        # NOTE: last_used is NOT updated here. Callers that successfully
+        # complete an operation (cmd_test/exec/upload/download/probe-net) must
+        # call _touch_last_used(cfg, alias) after their work finishes. Doing
+        # it here would mean a constraint-rejected request still mutates the
+        # config file (see issue A1 in the audit).
 
     if not args.host or not args.user:
         sys.stderr.write("[ERROR] --host and --user are required (or pass --session ALIAS)\n")
@@ -778,12 +808,29 @@ def _build_client(target: dict, args):
 # Streaming / SFTP utilities
 # --------------------------------------------------------------------------- #
 def _run_and_print(client, command: str, timeout: int = 300) -> int:
+    """Run a remote command, stream stdout/stderr, return its exit code.
+
+    Two layers of timeout protection:
+      1. paramiko's exec_command(timeout=...) — closes the channel when the
+         command has not produced output within `timeout` seconds.
+      2. A wall-clock deadline here — we bail out even if paramiko's internal
+         timer doesn't fire (e.g. the channel is stuck on a half-open socket).
+    """
     merged_env = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
     stdin, stdout, stderr = client.exec_command(
         command, timeout=timeout, environment=merged_env
     )
     chan = stdout.channel
+    deadline = time.monotonic() + timeout
+    timed_out = False
     while not chan.closed or chan.recv_ready() or chan.recv_stderr_ready():
+        if time.monotonic() > deadline:
+            timed_out = True
+            try:
+                chan.close()
+            except Exception:
+                pass
+            break
         if chan.recv_ready():
             sys.stdout.buffer.write(chan.recv(4096))
         if chan.recv_stderr_ready():
@@ -800,6 +847,12 @@ def _run_and_print(client, command: str, timeout: int = 300) -> int:
         sys.stderr.flush()
     except Exception:
         pass
+    if timed_out:
+        sys.stderr.write(
+            f"[ERROR] remote command exceeded {timeout}s timeout; channel closed\n"
+        )
+        # 124 matches GNU coreutils `timeout` convention.
+        return 124
     return chan.recv_exit_status()
 
 
@@ -837,8 +890,24 @@ def _sftp_mkdir_p(sftp, path: str) -> None:
                     sys.stderr.write(f"[WARN] mkdir failed: {cur} ({exc})\n")
 
 
-def _sftp_put_dir(sftp, src: Path, dst: str) -> None:
+def _sftp_progress_callback(deadline: float, label: str):
+    """Build a paramiko SFTP callback that aborts the transfer on deadline.
+
+    paramiko calls the callback with (bytes_transferred, total_bytes). We
+    only use the first argument to check elapsed time; raising from the
+    callback propagates as IOError at the put/get call site.
+    """
+    def _cb(transferred: int, _total: int) -> None:
+        if time.monotonic() > deadline:
+            raise IOError(
+                f"sftp transfer '{label}' exceeded deadline (after {transferred} bytes)"
+            )
+    return _cb
+
+
+def _sftp_put_dir(sftp, src: Path, dst: str, timeout: int = 600) -> None:
     _sftp_mkdir_p(sftp, dst)
+    deadline = time.monotonic() + timeout
     for root, dirs, files in os.walk(src):
         rel = Path(root).relative_to(src)
         remote_dir = (
@@ -852,19 +921,30 @@ def _sftp_put_dir(sftp, src: Path, dst: str) -> None:
             lpath = Path(root) / fname
             rpath = str(PurePosixPath(remote_dir) / fname)
             sys.stdout.write(f"[INFO] uploading {lpath} -> {rpath}\n")
-            sftp.put(str(lpath), rpath)
+            cb = _sftp_progress_callback(deadline, f"put {rpath}")
+            try:
+                sftp.put(str(lpath), rpath, callback=cb)
+            except IOError as exc:
+                sys.stderr.write(f"[ERROR] upload failed: {exc}\n")
+                raise
 
 
-def _sftp_get_dir(sftp, src: str, dst: Path) -> None:
+def _sftp_get_dir(sftp, src: str, dst: Path, timeout: int = 600) -> None:
     dst.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
     for entry in sftp.listdir_attr(src):
         spath = str(PurePosixPath(src) / entry.filename)
         dpath = dst / entry.filename
         if stat.S_ISDIR(entry.st_mode):
-            _sftp_get_dir(sftp, spath, dpath)
+            _sftp_get_dir(sftp, spath, dpath, timeout=timeout)
         else:
             sys.stdout.write(f"[INFO] downloading {spath} -> {dpath}\n")
-            sftp.get(spath, str(dpath))
+            cb = _sftp_progress_callback(deadline, f"get {spath}")
+            try:
+                sftp.get(spath, str(dpath), callback=cb)
+            except IOError as exc:
+                sys.stderr.write(f"[ERROR] download failed: {exc}\n")
+                raise
 
 
 # --------------------------------------------------------------------------- #
@@ -873,7 +953,8 @@ def _sftp_get_dir(sftp, src: str, dst: Path) -> None:
 def cmd_test(args) -> int:
     cfg = _ensure_cfg()
     target = _resolve_target(args)
-    _check_constraints(cfg, target["session"] or args.session or "", "test")
+    alias = target["session"] or args.session or ""
+    _check_constraints(cfg, alias, "test")
     _confirm_host(target, "test (connectivity check + host info)", args)
     client = _build_client(target, args)
     try:
@@ -888,7 +969,9 @@ def cmd_test(args) -> int:
         _run_and_print(
             client,
             "uname -a; echo '---'; cat /etc/os-release 2>/dev/null || true",
+            timeout=args.timeout,
         )
+        _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
         client.close()
@@ -912,7 +995,10 @@ def cmd_exec(args) -> int:
 
     client = _build_client(target, args)
     try:
-        return _run_and_print(client, args.command, timeout=args.cmd_timeout)
+        rc = _run_and_print(client, args.command, timeout=args.cmd_timeout)
+        if rc == 0:
+            _touch_last_used(cfg, alias)
+        return rc
     finally:
         client.close()
 
@@ -941,14 +1027,20 @@ def cmd_upload(args) -> int:
     client = _build_client(target, args)
     try:
         sftp = client.open_sftp()
+        deadline = time.monotonic() + args.transfer_timeout
         if local_path.is_dir():
-            _sftp_put_dir(sftp, local_path, args.remote)
+            _sftp_put_dir(sftp, local_path, args.remote, timeout=args.transfer_timeout)
         else:
             parent = str(PurePosixPath(args.remote).parent)
             if parent and parent != ".":
                 _sftp_mkdir_p(sftp, parent)
             sys.stdout.write(f"[INFO] uploading {local_path} -> {args.remote}\n")
-            sftp.put(str(local_path), args.remote)
+            cb = _sftp_progress_callback(deadline, f"put {args.remote}")
+            try:
+                sftp.put(str(local_path), args.remote, callback=cb)
+            except IOError as exc:
+                sys.stderr.write(f"[ERROR] upload failed: {exc}\n")
+                return 124
         if args.mode:
             try:
                 sftp.chmod(args.remote, int(args.mode, 8))
@@ -956,6 +1048,7 @@ def cmd_upload(args) -> int:
                 sys.stderr.write(f"[WARN] chmod failed: {exc}\n")
         sftp.close()
         sys.stdout.write(f"[OK] upload complete: {args.remote}\n")
+        _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
         client.close()
@@ -974,14 +1067,21 @@ def cmd_download(args) -> int:
     try:
         sftp = client.open_sftp()
         local_path = Path(args.local)
+        deadline = time.monotonic() + args.transfer_timeout
         if _sftp_is_dir(sftp, args.remote):
-            _sftp_get_dir(sftp, args.remote, local_path)
+            _sftp_get_dir(sftp, args.remote, local_path, timeout=args.transfer_timeout)
         else:
             local_path.parent.mkdir(parents=True, exist_ok=True)
             sys.stdout.write(f"[INFO] downloading {args.remote} -> {local_path}\n")
-            sftp.get(args.remote, str(local_path))
+            cb = _sftp_progress_callback(deadline, f"get {args.remote}")
+            try:
+                sftp.get(args.remote, str(local_path), callback=cb)
+            except IOError as exc:
+                sys.stderr.write(f"[ERROR] download failed: {exc}\n")
+                return 124
         sftp.close()
         sys.stdout.write(f"[OK] download complete: {local_path}\n")
+        _touch_last_used(cfg, alias)
         return EXIT_OK
     finally:
         client.close()
@@ -1033,6 +1133,7 @@ def cmd_probe_net(args) -> int:
             "[OK] remote has outbound network\n" if any_online
             else "[FAIL] remote appears offline\n"
         )
+        _touch_last_used(cfg, alias)
         return EXIT_OK if any_online else 1
     finally:
         client.close()
@@ -1353,6 +1454,23 @@ def _cmd_set_constraints(cfg: dict, args, scope: str) -> int:
 # --------------------------------------------------------------------------- #
 # Argument parsing
 # --------------------------------------------------------------------------- #
+def _bool_flag(raw):
+    """argparse type for --flag true/false/1/0/yes/no (case-insensitive)."""
+    s = str(raw).strip().lower()
+    if s in ("true", "1", "yes", "y", "on"):
+        return True
+    if s in ("false", "0", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(
+        f"expected true/false, got {raw!r}"
+    )
+
+
+def _opt_bool_flag():
+    """Optional variant: returns None if not provided, otherwise bool."""
+    return lambda x: _bool_flag(x)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ssh_ops.py",
@@ -1377,6 +1495,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="skip high/critical risk token confirmation")
     p.add_argument("--insecure", action="store_true",
                    help="accept any host key (dangerous)")
+    p.add_argument("--transfer-timeout", type=int, default=600,
+                   help="SFTP upload/download wall-clock deadline, seconds (default 600)")
+    p.add_argument("--cmd-timeout", type=int, default=600,
+                   help="remote command wall-clock deadline, seconds (default 600, returns 124 on timeout)")
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -1387,7 +1509,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # exec
     sp = sub.add_parser("exec", help="run a remote command")
     sp.add_argument("command", help="remote shell command")
-    sp.add_argument("--cmd-timeout", type=int, default=600, help="command timeout")
     sp.add_argument("--sessions", help="comma-separated aliases for batch exec")
     sp.add_argument("--all", action="store_true", help="batch exec on all hosts")
     sp.set_defaults(func=cmd_exec)
@@ -1424,7 +1545,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--env", help="environment name")
     sp.add_argument("--label", help="human-readable label")
     sp.add_argument("--tags", nargs="*", help="tags")
-    sp.add_argument("--network-isolated", type=lambda x: x.lower() in ("true", "1", "yes"),
+    sp.add_argument("--network-isolated", type=_bool_flag, default=None,
                     help="mark this host as network_isolated (true/false)")
     sp.set_defaults(func=cmd_session)
 
@@ -1446,7 +1567,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="set require_double_confirm constraint (true/false)")
     sp_env.add_argument("--denied-patterns", nargs="*", help="space-separated regex list")
     sp_env.add_argument("--allowed-hours", help="HH:MM-HH:MM or empty")
-    sp_env.add_argument("--network-isolated", type=lambda x: x.lower() in ("true", "1", "yes"),
+    sp_env.add_argument("--network-isolated", type=_bool_flag, default=None,
                         help="mark this environment as network_isolated (true/false)")
     sp_env.set_defaults(func=cmd_config)
 
@@ -1467,7 +1588,7 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="set require_double_confirm constraint (true/false)")
     sp_host.add_argument("--denied-patterns", nargs="*", help="space-separated regex list")
     sp_host.add_argument("--allowed-hours", help="HH:MM-HH:MM or empty")
-    sp_host.add_argument("--network-isolated", type=lambda x: x.lower() in ("true", "1", "yes"),
+    sp_host.add_argument("--network-isolated", type=_bool_flag, default=None,
                          help="mark this host as network_isolated (true/false)")
     sp_host.set_defaults(func=cmd_config)
 
