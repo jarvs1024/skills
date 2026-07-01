@@ -26,6 +26,8 @@
 | `--cleanup-dry-run` | 只打印会清理的路径，不删除 |
 | `--remote-staging-dir DIR` | 远端 staging 基路径，默认 `/tmp` |
 | `--local-staging-dir DIR` | 本地 staging 基路径，默认 `~/.ssh-remote/tmp` |
+| `--allow-internal-mirror` | `network_isolated` 主机：跳过 mirror 判定（带 WARN 日志） |
+| `--allow-public-probe` | `network_isolated` 主机：probe-net 允许测公网目标 |
 
 ## 密码读取优先级（高 → 低）
 

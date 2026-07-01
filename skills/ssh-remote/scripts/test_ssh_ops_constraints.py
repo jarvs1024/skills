@@ -179,13 +179,19 @@ def test_network_isolated_default_false():
 
 def test_network_isolated_blocks_curl_in_exec():
     from ssh_ops import _command_needs_public_network, _check_constraints
-    assert _command_needs_public_network("curl https://github.com") is True
-    assert _command_needs_public_network("yum install -y htop") is True
-    assert _command_needs_public_network("apt-get update") is True
-    assert _command_needs_public_network("pip install requests") is True
-    assert _command_needs_public_network("uname -a") is False
-    assert _command_needs_public_network("cat /etc/hosts") is False
-    assert _command_needs_public_network("") is False
+    # explicit public URL -> blocked
+    assert _command_needs_public_network("curl https://github.com") == (True, "public URL in command: https://github.com")
+    # explicit internal URL -> allowed
+    assert _command_needs_public_network("curl http://10.0.0.5:8080/x") == (False, "")
+    # keyword without URL, no client probe -> conservative default block
+    assert _command_needs_public_network("yum install -y htop") == (True, "command needs public Internet but no URL given and no default mirror could be probed")
+    assert _command_needs_public_network("apt-get update")[0] is True
+    # plain command, no public keyword -> allowed
+    assert _command_needs_public_network("uname -a") == (False, "")
+    assert _command_needs_public_network("cat /etc/hosts") == (False, "")
+    assert _command_needs_public_network("") == (False, "")
+    # allow-internal-mirror override bypasses
+    assert _command_needs_public_network("curl https://github.com", allow_internal_mirror=True) == (False, "")
 
     cfg = _cfg(host_constraints={"network_isolated": True})
     with pytest.raises(SystemExit) as exc_info:

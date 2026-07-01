@@ -54,6 +54,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path, PurePosixPath
+
+import ipaddress
+
 from cleanup import CleanupRegistry, run_id
 
 # Optional dependency: paramiko is required only when connecting.
@@ -146,6 +149,83 @@ PUBLIC_NETWORK_PATTERNS = [
     r"\bwhois\b",
     r"\bntpdate\b",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# network_isolated helpers: internal vs public network classification
+# --------------------------------------------------------------------------- #
+_PRIVATE_HOSTNAME_SUFFIXES = (
+    ".internal", ".local", ".corp", ".lan", ".intranet",
+    ".localdomain", ".private", ".cluster.local",
+)
+_PRIVATE_DOMAINS = {"localhost", "host.docker.internal", "ip6-localhost", "ip6-loopback"}
+
+
+def _is_internal_host(host: str) -> bool:
+    """Return True if host is an RFC1918/RFC4193/loopback/link-local IP or a private suffix."""
+    if not host:
+        return False
+    h = host.strip().lower().rstrip(".")
+    if h.startswith("[") and "]" in h:
+        h = h[1:h.index("]")]
+    if "@" in h:
+        h = h.rsplit("@", 1)[1]
+    if ":" in h and h.count(":") == 1:
+        h = h.rsplit(":", 1)[0]
+    if h in _PRIVATE_DOMAINS:
+        return True
+    for sfx in _PRIVATE_HOSTNAME_SUFFIXES:
+        if h.endswith(sfx):
+            return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
+def _extract_urls(command: str) -> list[str]:
+    """Extract http(s)/ftp/ssh URLs from a command line."""
+    if not command:
+        return []
+    return re.findall(r"\b(?:https?|ftp|ssh)://[^\s\"'`]+", command)
+
+
+def _extract_host_from_url(url: str) -> str:
+    """Extract the host portion of a URL, stripping scheme/userinfo/port."""
+    if not url:
+        return ""
+    m = re.match(r"^(?:https?|ftp|ssh)://(?:[^@/]+@)?([^/?#:]+)", url, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _resolve_default_mirrors(client) -> list[str]:
+    """Probe the remote host for configured package-manager mirrors.
+
+    Returns a list of URLs (may be empty). Best-effort; failures are swallowed.
+    """
+    probes = [
+        ("pip-conf", "cat ~/.config/pip/pip.conf ~/.pip/pip.conf /etc/pip.conf 2>/dev/null | grep -oE 'https?://[^[:space:]]+' | head -10"),
+        ("npm", "npm config get registry 2>/dev/null"),
+        ("yarn", "yarn config get registry 2>/dev/null"),
+        ("pnpm", "pnpm config get registry 2>/dev/null"),
+        ("yum", "yum repolist 2>/dev/null | grep -oE 'https?://[^ ]+' | head -10"),
+        ("dnf", "dnf repolist 2>/dev/null | grep -oE 'https?://[^ ]+' | head -10"),
+        ("maven", "grep -hoE 'https?://[^<>\"]+' ~/.m2/settings.xml 2>/dev/null | head -10"),
+        ("go", "go env GOPROXY 2>/dev/null"),
+    ]
+    urls = []
+    for _name, cmd in probes:
+        try:
+            _stdin, stdout, _ = client.exec_command(cmd, timeout=5,
+                                                 environment={"LC_ALL": "C.UTF-8"})
+            out = stdout.read().decode("utf-8", errors="replace").strip()
+            for u in re.findall(r"https?://[^\s\"'<>]+", out):
+                urls.append(u)
+        except Exception:
+            pass
+    return urls
+
 
 # High-risk command patterns: (regex, level, reason).
 # CRITICAL patterns are listed first so they win over general patterns.
@@ -462,8 +542,12 @@ def _is_within_allowed_hours(spec: str | None) -> bool:
     return now >= start or now <= end
 
 
-def _command_needs_public_network(command: str) -> bool:
-    """Return True if the command obviously requires public Internet access."""
+def _command_matches_public_pattern(command: str) -> bool:
+    """Return True if the command string matches any public-network pattern.
+
+    Kept as a fast pre-check so well-known package-manager / network-tool
+    commands are flagged immediately, before the slower URL extraction.
+    """
     if not command:
         return False
     for pat in PUBLIC_NETWORK_PATTERNS:
@@ -475,7 +559,70 @@ def _command_needs_public_network(command: str) -> bool:
     return False
 
 
-def _check_constraints(cfg: dict, alias: str, op: str, command: str | None = None) -> None:
+def _command_needs_public_network(
+    command: str,
+    client=None,
+    allow_internal_mirror: bool = False,
+) -> tuple[bool, str]:
+    """Decide whether `command` requires access to the public Internet.
+
+    Algorithm (network_isolated hosts only):
+      1. If `allow_internal_mirror` is True, return (False, "") immediately.
+      2. If the command has no public-network keyword, return (False, "").
+      3. Extract URLs from the command. For each:
+         - host is RFC1918 / loopback / link-local / private suffix -> internal, ok
+         - host is a public domain -> needs public, return the offending URL
+         - host unresolvable -> treat as public (conservative)
+      4. If the command has the keyword but no explicit URL:
+         - probe the remote host for default-mirror configuration (best-effort)
+         - if all probed mirrors are internal -> internal, ok
+         - if any probed mirror is public / probe failed -> needs public
+      5. If the command has the keyword but the URL set is empty AND no probe
+         info -> conservative default: needs public (helps the operator get a
+         clear error pointing them at how to configure mirrors).
+    """
+    if allow_internal_mirror:
+        return False, ""
+    if not _command_matches_public_pattern(command):
+        return False, ""
+
+    urls = _extract_urls(command)
+    public_urls: list[str] = []
+    internal_urls: list[str] = []
+    for url in urls:
+        host = _extract_host_from_url(url)
+        if _is_internal_host(host):
+            internal_urls.append(url)
+        else:
+            public_urls.append(url)
+    if public_urls:
+        return True, f"public URL in command: {public_urls[0]}"
+    if internal_urls and not public_urls:
+        return False, ""
+
+    # Command has the keyword but no explicit URL. Probe the remote host.
+    probed: list[str] = []
+    if client is not None:
+        try:
+            probed = _resolve_default_mirrors(client)
+        except Exception:
+            probed = []
+    if not probed:
+        return True, "command needs public Internet but no URL given and no default mirror could be probed"
+    probed_public = [u for u in probed if not _is_internal_host(_extract_host_from_url(u))]
+    if probed_public:
+        return True, f"default mirror points to public network: {probed_public[0]}"
+    return False, ""
+    for pat in PUBLIC_NETWORK_PATTERNS:
+        try:
+            if re.search(pat, command, re.IGNORECASE):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+def _check_constraints(cfg: dict, alias: str, op: str, command: str | None = None, client=None, allow_internal_mirror: bool = False) -> None:
     """Check constraints for an operation. Raises SystemExit on denial."""
     constraints = _get_effective_constraints(cfg, alias)
 
@@ -490,12 +637,26 @@ def _check_constraints(cfg: dict, alias: str, op: str, command: str | None = Non
         )
         sys.exit(EXIT_OUTSIDE_ALLOWED_HOURS)
 
-    if op in ("exec", "upload") and constraints.get("network_isolated") and _command_needs_public_network(command or ""):
-        sys.stderr.write(
-            f"[ERROR] host '{alias}' is marked network_isolated; "
-            f"refusing {op} that appears to need public Internet access\n"
+    if op in ("exec", "upload") and constraints.get("network_isolated"):
+        needs_public, reason = _command_needs_public_network(
+            command or "",
+            client=client,
+            allow_internal_mirror=allow_internal_mirror,
         )
-        sys.exit(EXIT_CONSTRAINT_DENIED)
+        if needs_public:
+            sys.stderr.write(
+                f"[ERROR] host '{alias}' is network_isolated; refusing {op}: {reason}\n"
+            )
+            sys.stderr.write(
+                "[HINT]  if a private mirror is configured on the remote:\n"
+                "          - use it explicitly: pip install -i http://internal-pypi/simple ...\n"
+                "          - or configure the global mirror and re-run:\n"
+                "            pip config set global.index-url http://internal-pypi/simple\n"
+                "            npm config set registry http://internal-npm/  (etc.)\n"
+                "          - or bypass per-call: --allow-internal-mirror\n"
+                "        see references/network_isolated.md\n"
+            )
+            sys.exit(EXIT_CONSTRAINT_DENIED)
 
     if op == "exec" and command:
         for pat in constraints.get("denied_patterns", []):
@@ -973,7 +1134,7 @@ def cmd_test(args) -> int:
     cfg = _ensure_cfg()
     target = _resolve_target(args)
     alias = target["session"] or args.session or ""
-    _check_constraints(cfg, alias, "test")
+    _check_constraints(cfg, alias, "test", client=None, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
     _confirm_host(target, "test (connectivity check + host info)", args)
     client = _build_client(target, args)
     args._client = client
@@ -1000,7 +1161,9 @@ def cmd_exec(args) -> int:
     cfg = _ensure_cfg()
     target = _resolve_target(args)
     alias = target["session"] or args.session or ""
-    _check_constraints(cfg, alias, "exec", command=args.command)
+    # Pre-flight check without client: read_only / allowed_hours / network_isolated
+    # (network_isolated without client is conservative: no remote mirror probe.)
+    _check_constraints(cfg, alias, "exec", command=args.command, client=None, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
 
     remote_staging = f"{args.remote_staging_dir.rstrip('/')}/{args._run_id}"
     registry = getattr(args, "_registry", None)
@@ -1018,6 +1181,14 @@ def cmd_exec(args) -> int:
     client = _build_client(target, args)
     args._client = client
     try:
+        # Post-build re-check: network_isolated now has a client to probe
+        # default mirrors on the remote (pip.conf / npm config / yum repolist / etc.)
+        # so that `yum install foo` (no explicit URL) is allowed if the remote
+        # has a private mirror configured.
+        _check_constraints(
+            cfg, alias, "exec", command=args.command, client=client,
+            allow_internal_mirror=getattr(args, "allow_internal_mirror", False),
+        )
         mkdir_cmd = f"mkdir -p {shlex.quote(remote_staging)}"
         mkdir_rc = _run_and_print(client, mkdir_cmd, timeout=args.timeout)
         if mkdir_rc == 0 and registry:
@@ -1065,7 +1236,7 @@ def cmd_upload(args) -> int:
     args.remote = _normalize_remote_path(args.remote, label="--remote")
     target = _resolve_target(args)
     alias = target["session"] or args.session or ""
-    _check_constraints(cfg, alias, "upload")
+    _check_constraints(cfg, alias, "upload", client=client, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
 
     op = f"upload {args.local} -> {args.remote}"
     upload_risks = _classify_upload_risk(args.remote, args.mode)
@@ -1121,7 +1292,7 @@ def cmd_download(args) -> int:
     args.remote = _normalize_remote_path(args.remote, label="--remote")
     target = _resolve_target(args)
     alias = target["session"] or args.session or ""
-    _check_constraints(cfg, alias, "download")
+    _check_constraints(cfg, alias, "download", client=client, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
 
     op = f"download {args.remote} -> {args.local}"
     _confirm_host(target, op, args)
@@ -1165,13 +1336,24 @@ def cmd_probe_net(args) -> int:
     _check_constraints(cfg, alias, "probe-net")
 
     if _get_effective_constraints(cfg, alias).get("network_isolated"):
-        sys.stderr.write(
-            f"[ERROR] host '{alias}' is marked network_isolated; "
-            "probe-net to public targets is refused by policy\n"
-            "[HINT]  see references/offline-workflow.md for the offline playbook.\n"
-            "        to override per-call, set --allow-probe-net (NOT YET IMPLEMENTED).\n"
-        )
-        return EXIT_NETWORK_ISOLATED_PROBE
+        # Resolve effective target list to filter internal vs public
+        effective_targets = args.targets if args.targets else [
+            "https://github.com",
+            "https://www.baidu.com",
+            "https://pypi.org",
+        ]
+        any_public = any(not _is_internal_host(_extract_host_from_url(t)) for t in effective_targets)
+        if any_public and not getattr(args, "allow_public_probe", False):
+            public = [t for t in effective_targets
+                     if not _is_internal_host(_extract_host_from_url(t))]
+            sys.stderr.write(
+                f"[ERROR] host '{alias}' is network_isolated; "
+                f"probe-net to public target(s) refused: {public}\n"
+                "[HINT]  pass --targets to limit to internal hosts (e.g. http://10.x.x.x),\n"
+                "        or set --allow-public-probe to explicitly opt in.\n"
+                "        see references/network_isolated.md\n"
+            )
+            return EXIT_NETWORK_ISOLATED_PROBE
 
     op = "probe-net (read-only network reachability)"
     _confirm_host(target, op, args)
@@ -1568,6 +1750,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="skip high/critical risk token confirmation")
     p.add_argument("--insecure", action="store_true",
                    help="accept any host key (dangerous)")
+    p.add_argument("--allow-internal-mirror", action="store_true",
+                   help="network_isolated: bypass mirror guard (WARN logged)")
+    p.add_argument("--allow-public-probe", action="store_true",
+                   help="network_isolated: probe-net may hit public targets")
     p.add_argument("--no-cleanup", action="store_true",
                    help="skip automatic cleanup of temporary files")
     p.add_argument("--cleanup-dry-run", action="store_true",

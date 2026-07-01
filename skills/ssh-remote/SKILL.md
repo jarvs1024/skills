@@ -128,6 +128,24 @@ description: SSH 远程操作 skill — 通过 ~/.config/ssh_remote_config.json 
 | 19 | 时间窗口外 |
 | 其他 | 远端命令自身的 exit code |
 
+## network_isolated 内部镜像源白名单
+
+设置 `network_isolated: true` 的 host 默认拒绝公网访问。ssh-remote 区分"内网目标"与"公网目标"，
+放行内网镜像源：
+
+- 显式 URL：host 是 RFC1918 / loopback / link-local / `.internal` `.local` `.corp` `.lan` `.intranet` → 放行
+- 无显式 URL：探测远端默认源（pip.conf / npm config / yum repolist / Maven / Go env），全内网 → 放行
+- 探测失败或默认源为公网 → 拒绝并提示配置源
+
+绕过：
+
+- 命令里显式指向内网源：`pip install -i http://pypi.corp/simple ...`
+- 远端配置全局 mirror 后重跑
+- 临时放行：`--allow-internal-mirror`
+- probe-net 公网目标用 `--allow-public-probe`
+
+详细判定逻辑、probe-net 处理、绕过示例：见 [references/network_isolated.md](references/network_isolated.md)。
+
 ## 临时文件清理
 
 ssh-remote 默认在执行结束后清理本次进程产生的临时文件，无论成功或失败。
