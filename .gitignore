@@ -11,3 +11,4 @@ credentials.json
 *.bak
 .DS_Store
 Thumbs.db
+docs/superpowers/
