@@ -608,18 +608,16 @@ def _command_needs_public_network(
         except Exception:
             probed = []
     if not probed:
+        if client is None:
+            # Pre-flight check without a connected client — can't probe
+            # remote mirrors; defer to the post-build re-check in
+            # cmd_exec / cmd_upload / cmd_download.
+            return False, ""
         return True, "command needs public Internet but no URL given and no default mirror could be probed"
     probed_public = [u for u in probed if not _is_internal_host(_extract_host_from_url(u))]
     if probed_public:
         return True, f"default mirror points to public network: {probed_public[0]}"
     return False, ""
-    for pat in PUBLIC_NETWORK_PATTERNS:
-        try:
-            if re.search(pat, command, re.IGNORECASE):
-                return True
-        except re.error:
-            continue
-    return False
 
 
 def _check_constraints(cfg: dict, alias: str, op: str, command: str | None = None, client=None, allow_internal_mirror: bool = False) -> None:
@@ -1236,7 +1234,7 @@ def cmd_upload(args) -> int:
     args.remote = _normalize_remote_path(args.remote, label="--remote")
     target = _resolve_target(args)
     alias = target["session"] or args.session or ""
-    _check_constraints(cfg, alias, "upload", client=client, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
+    _check_constraints(cfg, alias, "upload", client=None, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
 
     op = f"upload {args.local} -> {args.remote}"
     upload_risks = _classify_upload_risk(args.remote, args.mode)
@@ -1254,6 +1252,13 @@ def cmd_upload(args) -> int:
         return EXIT_USAGE
     client = _build_client(target, args)
     args._client = client
+    # Post-build re-check: network_isolated now has a client to probe
+    # default mirrors on the remote.
+    _check_constraints(
+        cfg, alias, "upload",
+        client=client,
+        allow_internal_mirror=getattr(args, "allow_internal_mirror", False),
+    )
     try:
         sftp = client.open_sftp()
         deadline = time.monotonic() + args.transfer_timeout
@@ -1292,12 +1297,19 @@ def cmd_download(args) -> int:
     args.remote = _normalize_remote_path(args.remote, label="--remote")
     target = _resolve_target(args)
     alias = target["session"] or args.session or ""
-    _check_constraints(cfg, alias, "download", client=client, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
+    _check_constraints(cfg, alias, "download", client=None, allow_internal_mirror=getattr(args, "allow_internal_mirror", False))
 
     op = f"download {args.remote} -> {args.local}"
     _confirm_host(target, op, args)
     client = _build_client(target, args)
     args._client = client
+    # Post-build re-check: network_isolated now has a client to probe
+    # default mirrors on the remote.
+    _check_constraints(
+        cfg, alias, "download",
+        client=client,
+        allow_internal_mirror=getattr(args, "allow_internal_mirror", False),
+    )
     try:
         sftp = client.open_sftp()
         local_path = Path(args.local)

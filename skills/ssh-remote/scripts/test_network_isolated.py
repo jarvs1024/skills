@@ -96,9 +96,10 @@ def test_needs_public_explicit_internal_url():
 
 
 def test_needs_public_no_url_keyword_conservative():
+    # Keyword without URL, no client -> deferred to post-build re-check.
     needs, reason = _command_needs_public_network("yum install -y htop")
-    assert needs is True
-    assert "mirror" in reason.lower() or "internet" in reason.lower()
+    assert needs is False
+    assert reason == ""
 
 
 def test_needs_public_safe_command():

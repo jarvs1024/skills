@@ -183,9 +183,9 @@ def test_network_isolated_blocks_curl_in_exec():
     assert _command_needs_public_network("curl https://github.com") == (True, "public URL in command: https://github.com")
     # explicit internal URL -> allowed
     assert _command_needs_public_network("curl http://10.0.0.5:8080/x") == (False, "")
-    # keyword without URL, no client probe -> conservative default block
-    assert _command_needs_public_network("yum install -y htop") == (True, "command needs public Internet but no URL given and no default mirror could be probed")
-    assert _command_needs_public_network("apt-get update")[0] is True
+    # keyword without URL, no client -> deferred to post-build re-check
+    assert _command_needs_public_network("yum install -y htop") == (False, "")
+    assert _command_needs_public_network("apt-get update") == (False, "")
     # plain command, no public keyword -> allowed
     assert _command_needs_public_network("uname -a") == (False, "")
     assert _command_needs_public_network("cat /etc/hosts") == (False, "")
