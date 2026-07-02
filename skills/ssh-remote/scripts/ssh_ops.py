@@ -1726,98 +1726,127 @@ def _opt_bool_flag():
     return lambda x: _bool_flag(x)
 
 
+class SmartArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that supports common flags both before and after sub-commands.
+
+    When common flags are placed before the sub-command, argparse with parents=
+    causes the sub-parser's default to override the top-level value. This class
+    fixes that by pre-parsing common flags and merging them into the final result.
+    """
+
+    def __init__(self, common_parser=None, **kwargs):
+        super().__init__(**kwargs)
+        self._common_parser = common_parser
+
+    def parse_args(self, args=None, namespace=None):
+        if args is None:
+            args = sys.argv[1:]
+        if not isinstance(args, (list, tuple)):
+            args = list(args)
+        if self._common_parser is not None:
+            common_args, _ = self._common_parser.parse_known_args(args)
+        ns = super().parse_args(args, namespace)
+        if self._common_parser is not None:
+            for action in self._common_parser._actions:
+                if action.dest.startswith('_'):
+                    continue
+                pre_val = getattr(common_args, action.dest, action.default)
+                full_val = getattr(ns, action.dest, action.default)
+                if pre_val != action.default and full_val == action.default:
+                    setattr(ns, action.dest, pre_val)
+        return ns
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    # Common flags shared by all sub-commands (defined once, inherited via
+    # parents=[common] below so they can appear before OR after the sub-command).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--session", help="alias from config")
+    common.add_argument("--host", help="remote host or IP")
+    common.add_argument("--port", type=int, default=22, help="SSH port (default 22)")
+    common.add_argument("--user", help="remote username")
+    common.add_argument("--label", help="human-readable label")
+    common.add_argument("--password", help="remote password")
+    common.add_argument("--key-file", help="SSH private key path")
+    common.add_argument("--no-password-with-key", action="store_true",
+                        help="do not use password as key passphrase")
+    common.add_argument("--timeout", type=int, default=15, help="connect/auth timeout")
+    common.add_argument("--trust-host", action="store_true",
+                        help="auto-trust unknown host key")
+    common.add_argument("--host-key", help="explicit known_hosts file")
+    common.add_argument("--yes", action="store_true",
+                        help="skip host confirmation")
+    common.add_argument("--i-know", action="store_true",
+                        help="skip high/critical risk token confirmation")
+    common.add_argument("--insecure", action="store_true",
+                        help="accept any host key (dangerous)")
+    common.add_argument("--allow-internal-mirror", action="store_true",
+                        help="network_isolated: bypass mirror guard (WARN logged)")
+    common.add_argument("--allow-public-probe", action="store_true",
+                        help="network_isolated: probe-net may hit public targets")
+    common.add_argument("--no-cleanup", action="store_true",
+                        help="skip automatic cleanup of temporary files")
+    common.add_argument("--cleanup-dry-run", action="store_true",
+                        help="print temporary paths that would be cleaned")
+    common.add_argument("--remote-staging-dir", default="/tmp",
+                        help="remote base directory for staging (default: /tmp)")
+    common.add_argument("--local-staging-dir", default=None,
+                        help="local base directory for staging (default: ~/.ssh-remote/tmp)")
+    common.add_argument("--transfer-timeout", type=int, default=600,
+                        help="SFTP upload/download wall-clock deadline, seconds (default 600)")
+    common.add_argument("--cmd-timeout", type=int, default=600,
+                        help="remote command wall-clock deadline, seconds (default 600, returns 124 on timeout)")
+
+    p = SmartArgumentParser(
         prog="ssh_ops.py",
         description="SSH operations helper (ssh-remote skill v3)",
+        common_parser=common,
+        parents=[common],
     )
-    p.add_argument("--session", help="alias from config")
-    p.add_argument("--host", help="remote host or IP")
-    p.add_argument("--port", type=int, default=22, help="SSH port (default 22)")
-    p.add_argument("--user", help="remote username")
-    p.add_argument("--label", help="human-readable label")
-    p.add_argument("--password", help="remote password")
-    p.add_argument("--key-file", help="SSH private key path")
-    p.add_argument("--no-password-with-key", action="store_true",
-                   help="do not use password as key passphrase")
-    p.add_argument("--timeout", type=int, default=15, help="connect/auth timeout")
-    p.add_argument("--trust-host", action="store_true",
-                   help="auto-trust unknown host key")
-    p.add_argument("--host-key", help="explicit known_hosts file")
-    p.add_argument("--yes", action="store_true",
-                   help="skip host confirmation")
-    p.add_argument("--i-know", action="store_true",
-                   help="skip high/critical risk token confirmation")
-    p.add_argument("--insecure", action="store_true",
-                   help="accept any host key (dangerous)")
-    p.add_argument("--allow-internal-mirror", action="store_true",
-                   help="network_isolated: bypass mirror guard (WARN logged)")
-    p.add_argument("--allow-public-probe", action="store_true",
-                   help="network_isolated: probe-net may hit public targets")
-    p.add_argument("--no-cleanup", action="store_true",
-                   help="skip automatic cleanup of temporary files")
-    p.add_argument("--cleanup-dry-run", action="store_true",
-                   help="print temporary paths that would be cleaned")
-    p.add_argument("--remote-staging-dir", default="/tmp",
-                   help="remote base directory for staging (default: /tmp)")
-    p.add_argument("--local-staging-dir", default=None,
-                   help="local base directory for staging (default: ~/.ssh-remote/tmp)")
-    p.add_argument("--transfer-timeout", type=int, default=600,
-                   help="SFTP upload/download wall-clock deadline, seconds (default 600)")
-    p.add_argument("--cmd-timeout", type=int, default=600,
-                   help="remote command wall-clock deadline, seconds (default 600, returns 124 on timeout)")
-
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # test
-    sp = sub.add_parser("test", help="connect and print host info")
+    sp = sub.add_parser("test", help="connect and print host info", parents=[common])
     sp.set_defaults(func=cmd_test)
 
     # exec
-    sp = sub.add_parser("exec", help="run a remote command")
+    sp = sub.add_parser("exec", help="run a remote command", parents=[common])
     sp.add_argument("command", help="remote shell command")
     sp.add_argument("--sessions", help="comma-separated aliases for batch exec")
     sp.add_argument("--all", action="store_true", help="batch exec on all hosts")
     sp.set_defaults(func=cmd_exec)
 
     # upload
-    sp = sub.add_parser("upload", help="upload file or directory")
+    sp = sub.add_parser("upload", help="upload file or directory", parents=[common])
     sp.add_argument("--local", required=True, help="local path")
     sp.add_argument("--remote", required=True, help="remote absolute path")
     sp.add_argument("--mode", help="chmod mode, e.g. 0755")
     sp.set_defaults(func=cmd_upload)
 
     # download
-    sp = sub.add_parser("download", help="download file or directory")
+    sp = sub.add_parser("download", help="download file or directory", parents=[common])
     sp.add_argument("--remote", required=True, help="remote absolute path")
     sp.add_argument("--local", required=True, help="local destination")
     sp.set_defaults(func=cmd_download)
 
     # probe-net
-    sp = sub.add_parser("probe-net", help="check outbound network from remote")
+    sp = sub.add_parser("probe-net", help="check outbound network from remote", parents=[common])
     sp.add_argument("--targets", nargs="+", help="URLs to probe")
     sp.add_argument("--timeout2", type=int, default=8, help="per-probe timeout")
     sp.set_defaults(func=cmd_probe_net)
 
     # session
-    sp = sub.add_parser("session", help="manage saved sessions/aliases")
+    sp = sub.add_parser("session", help="manage saved sessions/aliases", parents=[common])
     sp.add_argument("session_action", choices=["add", "rm", "list", "show", "use", "rename"])
     sp.add_argument("name", nargs="?", help="alias")
     sp.add_argument("name2", nargs="?", help="new alias for rename")
-    sp.add_argument("--host", help="remote host or IP")
-    sp.add_argument("--port", type=int, default=22)
-    sp.add_argument("--user", help="remote username")
-    sp.add_argument("--password", help="remote password (saved in plaintext)")
-    sp.add_argument("--key-file", help="SSH private key path")
-    sp.add_argument("--env", help="environment name")
-    sp.add_argument("--label", help="human-readable label")
     sp.add_argument("--tags", nargs="*", help="tags")
     sp.add_argument("--network-isolated", type=_bool_flag, default=None,
                     help="mark this host as network_isolated (true/false)")
     sp.set_defaults(func=cmd_session)
 
     # config
-    sp = sub.add_parser("config", help="manage global config")
+    sp = sub.add_parser("config", help="manage global config", parents=[common])
     config_sub = sp.add_subparsers(dest="config_cmd", required=True)
 
     sp_show = config_sub.add_parser("show", help="print config (passwords masked)")
@@ -1841,13 +1870,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_host = config_sub.add_parser("host", help="manage hosts")
     sp_host.add_argument("host_action", choices=["add", "rm", "list", "set-constraints"])
     sp_host.add_argument("host_alias", nargs="?", help="host alias")
-    sp_host.add_argument("--host", help="remote host or IP")
-    sp_host.add_argument("--port", type=int, default=22)
-    sp_host.add_argument("--user", help="remote username")
-    sp_host.add_argument("--key-file", help="SSH private key path")
-    sp_host.add_argument("--password", help="remote password")
-    sp_host.add_argument("--env", help="environment name")
-    sp_host.add_argument("--label", help="human-readable label")
     sp_host.add_argument("--tags", nargs="*", help="tags")
     sp_host.add_argument("--read-only", type=lambda x: x.lower() in ("true", "1", "yes"),
                          help="set read_only constraint (true/false)")
