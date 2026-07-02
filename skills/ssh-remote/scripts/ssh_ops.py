@@ -675,15 +675,72 @@ def _constraint_requires_double_confirm(cfg: dict, alias: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Path normalization
 # --------------------------------------------------------------------------- #
+# Known Git-for-Windows installation roots. When MSYS path conversion fires on
+# a POSIX absolute path like "/opt/transformers/...", it gets rewritten to
+# "<git-install-root>/opt/transformers/...". We detect that pattern and restore
+# the original POSIX path automatically.
+_GIT_BASH_INSTALL_ROOTS = (
+    "C:/Program Files/Git",
+    "C:/Program Files (x86)/Git",
+    "C:/ProgramData/Git",  # portable / per-user install
+    "C:/Git",
+)
+
+
+def _try_restore_mangled_posix(raw: str) -> str | None:
+    """If `raw` looks like a Git-Bash-mangled POSIX path, return the original.
+
+    Example mangled form: 'C:/Program Files/Git/opt/transformers/foo.py'
+    Restored form:         '/opt/transformers/foo.py'
+
+    Returns None if the input is not recognized as a mangled POSIX path.
+    """
+    if not raw or "\\" in raw:
+        return None
+    # Must be a Windows-style drive-letter path to be a candidate
+    if len(raw) < 4 or raw[1] != ":" or raw[2] != "/":
+        return None
+
+    # Normalize the prefix to forward slashes and lowercase for comparison
+    norm = raw.replace("\\", "/")
+    lower = norm.lower()
+    for root in _GIT_BASH_INSTALL_ROOTS:
+        root_lower = root.lower()
+        if not lower.startswith(root_lower + "/"):
+            continue
+        # Strip the Git install prefix and any leading slash
+        restored = norm[len(root):]
+        if not restored.startswith("/"):
+            restored = "/" + restored
+        # Only consider it a restore if the result is an absolute POSIX path
+        if restored.startswith("/") and len(restored) > 1:
+            return restored
+    return None
+
+
 def _normalize_remote_path(raw: str, label: str = "remote path") -> str:
     """Validate and normalize a remote path supplied via CLI.
 
-    Detects Windows/MSYS path mangling and refuses to proceed.
-    Returns a normalized POSIX absolute path.
+    Auto-restores Git-Bash-mangled POSIX paths (e.g. C:/Program Files/Git/opt/...
+    -> /opt/...). Detects remaining Windows/MSYS path mangling and refuses to
+    proceed. Returns a normalized POSIX absolute path.
     """
     if not raw:
         sys.stderr.write(f"[ERROR] {label} is empty\n")
         sys.exit(EXIT_USAGE)
+
+    # 1) Try to auto-restore a Git-Bash-mangled POSIX path
+    restored = _try_restore_mangled_posix(raw)
+    if restored is not None:
+        sys.stderr.write(
+            f"[FIX] {label} was auto-restored from Git-Bash-mangled form:\n"
+            f"        input:    {raw!r}\n"
+            f"        restored: {restored!r}\n"
+            f"        To prevent this in the future, set:\n"
+            f"          export MSYS_NO_PATHCONV=1\n"
+            f"          export MSYS2_ARG_CONV_EXCL='*'\n"
+        )
+        raw = restored
 
     if "\\" in raw:
         sys.stderr.write(f"[ERROR] {label} contains a backslash: {raw!r}\n")

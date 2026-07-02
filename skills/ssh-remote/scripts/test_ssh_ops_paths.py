@@ -73,10 +73,11 @@ def test_normalize_preserves_dotdot_lexically():
 # ---------------------------------------------------------------------------
 
 def test_normalize_rejects_windows_drive_letter():
-    """`C:/foo` must be rejected — that's the smoking gun of MSYS conversion."""
+    """A drive-letter path that is NOT under a known Git install root
+    (e.g. `D:/Users/foo`) must still be rejected as a mangled path."""
     from ssh_ops import _normalize_remote_path
     with pytest.raises(SystemExit) as exc_info:
-        _normalize_remote_path("C:/Program Files/Git/opt/foo")
+        _normalize_remote_path("D:/Users/foo")
     assert exc_info.value.code == 2
 
 
@@ -102,6 +103,58 @@ def test_normalize_rejects_empty_path():
     assert exc_info.value.code == 2
 
 
+def test_normalize_auto_restores_git_bash_mangled():
+    """Git-Bash-mangled POSIX paths are auto-restored to their original form.
+
+    Example: 'C:/Program Files/Git/opt/foo' -> '/opt/foo'
+    """
+    from ssh_ops import _normalize_remote_path
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        result = _normalize_remote_path("C:/Program Files/Git/opt/foo")
+    assert result == "/opt/foo"
+    # The fix should be announced to the operator
+    assert "auto-restored" in buf.getvalue()
+
+
+def test_normalize_auto_restores_x86_git_root():
+    """Same fix for the 32-bit Git install path."""
+    from ssh_ops import _normalize_remote_path
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        result = _normalize_remote_path("C:/Program Files (x86)/Git/opt/foo")
+    assert result == "/opt/foo"
+
+
+def test_normalize_auto_restores_with_spaces_in_subpath():
+    """The original POSIX path may itself contain spaces — fix must keep them."""
+    from ssh_ops import _normalize_remote_path
+    result = _normalize_remote_path("C:/Program Files/Git/opt/Project Files/foo.py")
+    assert result == "/opt/Project Files/foo.py"
+
+
+def test_normalize_auto_restores_lowercase_drive():
+    """Git Bash sometimes lowercases the drive letter."""
+    from ssh_ops import _normalize_remote_path
+    result = _normalize_remote_path("c:/Program Files/Git/opt/foo")
+    assert result == "/opt/foo"
+
+
+def test_normalize_no_restore_when_not_under_git_root():
+    """A drive-letter path that doesn't start with a known Git root is
+    not auto-restored — it goes through the regular rejection path."""
+    from ssh_ops import _normalize_remote_path
+    with pytest.raises(SystemExit) as exc_info:
+        _normalize_remote_path("C:/Windows/System32")
+    assert exc_info.value.code == 2
+
+
 def test_normalize_hint_mentions_msys():
     """The error message must guide Windows users to MSYS_NO_PATHCONV."""
     from ssh_ops import _normalize_remote_path, _print_msys_hint
@@ -111,7 +164,7 @@ def test_normalize_hint_mentions_msys():
     buf = io.StringIO()
     with redirect_stderr(buf):
         try:
-            _normalize_remote_path("C:/Users/foo")
+            _normalize_remote_path("D:/Users/foo")
         except SystemExit:
             pass
     text = buf.getvalue()
@@ -151,7 +204,8 @@ def test_upload_rejects_mangled_path_under_default_git_bash():
     )
 
 
-def test_upload_rejects_backslash_path():
+def test_upload_backslash_path_still_rejected():
+    """Backslash paths can never be auto-restored — must be rejected."""
     result = _run_ssh_ops(
         "--host", "10.20.30.40",
         "--user", "fake",
@@ -165,3 +219,29 @@ def test_upload_rejects_backslash_path():
     assert result.returncode == 2
     combined = result.stdout + result.stderr
     assert "backslash" in combined.lower()
+
+
+def test_upload_auto_restores_git_bash_mangled_path():
+    """A Git-Bash-mangled --remote path is auto-restored to /opt/... and the
+    upload proceeds past the path check (then fails for a different reason —
+    fake host can't be reached, but the [FIX] diagnostic should be visible)."""
+    result = _run_ssh_ops(
+        "--host", "10.20.30.40",
+        "--user", "fake",
+        "--port", "22",
+        "--password", "fake",
+        "--yes",
+        "upload",
+        "--local", str(HERE / "ssh_ops.py"),
+        "--remote", "C:/Program Files/Git/opt/restore_target.txt",
+    )
+    combined = result.stdout + result.stderr
+    # The path layer accepted the input — must have emitted the [FIX] line
+    assert "[FIX]" in combined, (
+        f"expected [FIX] auto-restore announcement, got rc={result.returncode}; "
+        f"combined={combined!r}"
+    )
+    # Must NOT be the path-rejection exit code
+    assert result.returncode != 2 or "auto-restored" in combined, (
+        f"unexpected exit 2 from path layer; combined={combined!r}"
+    )
